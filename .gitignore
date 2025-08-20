@@ -1,0 +1,6 @@
+data/raw/
+data/processed/
+_hold/
+.ipynb_checkpoints/
+*.parquet
+*.zip
