@@ -7,14 +7,7 @@ It combines CitiBike trip data with NOAA weather data and produces daily aggrega
 
 ## 📂 Project Structure
 
-citi-bike-2022-weather/
-├── data/
-│ ├── raw/ # Raw trip and weather files (ignored in git)
-│ └── processed/ # Cleaned & merged datasets (only key file tracked)
-├── notebooks/ # Jupyter notebooks for downloading, cleaning, merging
-├── reports/ # Visualizations and summary outputs
-├── README.md # Project documentation
-└── .gitignore # Ignore rules for large data
+<pre> ```text citi-bike-2022-weather/ ├── data/ │ ├── raw/ # Raw trip and weather files (ignored in git) │ └── processed/ # Cleaned & merged datasets (only key file tracked) ├── notebooks/ # Jupyter notebooks for downloading, cleaning, merging ├── reports/ # Visualizations and summary outputs ├── README.md # Project documentation └── .gitignore # Ignore rules for large data ``` </pre>
 
 ---
 
