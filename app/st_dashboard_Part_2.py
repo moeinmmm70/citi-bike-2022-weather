@@ -12,13 +12,6 @@ pio.templates.default = "plotly_white"
 
 st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", layout="wide")
 
-# ---- Paths ----
-DATA_PATH = Path("data/processed/reduced_citibike_2022.csv")   # <=25MB sample
-MAP_HTMLS = [
-    Path("reports/map/citibike_trip_flows_2022.html"),
-    Path("reports/map/NYC_Bike_Trips_Aggregated.html"),
-]
-
 # ---- Small helpers (to avoid extra deps) ----
 def kfmt(x):
     """Human-readable number formatting (e.g., 12.3K)."""
@@ -33,7 +26,7 @@ def kfmt(x):
     return f"{x:.1f}T"
 
 @st.cache_data
-def load_data(path: Path) -> pd.DataFrame:
+def load_data(path: Path, _sig: float | None = None) -> pd.DataFrame:
     df = pd.read_csv(path, low_memory=False)
     # normalize/parse
     if "date" in df.columns:
@@ -43,9 +36,9 @@ def load_data(path: Path) -> pd.DataFrame:
     # season if missing
     if "season" not in df.columns and "date" in df.columns:
         def season_from_month(m):
-            if m in (12,1,2):  return "Winter"
-            if m in (3,4,5):   return "Spring"
-            if m in (6,7,8):   return "Summer"
+            if m in (12, 1, 2):  return "Winter"
+            if m in (3, 4, 5):   return "Spring"
+            if m in (6, 7, 8):   return "Summer"
             return "Autumn"
         df["season"] = df["date"].dt.month.map(season_from_month)
     return df
@@ -361,6 +354,7 @@ elif page == "Recommendations":
 st.markdown("> **Next** — Pilot these changes at the top 10 stations for 2 weeks; compare KPIs before/after.")
 
 st.caption("Limitations: sample size reduced for deployment; no direct inventory per dock; events/holidays not modeled.")
+
 
 
 
