@@ -98,6 +98,9 @@ st.sidebar.info("Using a reduced sample (≤25 MB) for deployment. Figures refle
 if page == "Intro":
     st.title("NYC Citi Bike — Strategy Dashboard")
     st.markdown("### ")
+    hero_path = Path("reports/cover_bike.webp")
+    if hero_path.exists():
+        st.image(hero_path.as_posix(), use_column_width=True, caption="Citi Bike NYC. Photo © citibikenyc.com", output_format="auto")
     st.markdown("""
 **Purpose** — 🔎 Pinpoint **where/when** Citi Bike NYC faces **inventory stress** and what to do about it.
 
@@ -111,10 +114,6 @@ if page == "Intro":
 **Scope** — 📦 Reduced sample of trips + daily weather (≤25 MB) to enable deployment.  
 **Tip** — Use the sidebar to switch pages and filter seasons.
 """)
-    
-    hero_path = Path("reports/cover_bike.webp")
-    if hero_path.exists():
-        st.image(hero_path.as_posix(), use_column_width=True, caption="Citi Bike NYC. Photo © citibikenyc.com", output_format="auto")
 
 # 2) Weather vs Bike Usage (dual-axis)
 elif page == "Weather vs Bike Usage":
@@ -350,6 +349,7 @@ elif page == "Recommendations":
     st.markdown("### ")
     st.markdown("### ")
     st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
+
 
 
 
