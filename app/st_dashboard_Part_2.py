@@ -3,8 +3,6 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import streamlit as st
-from numerize import numerize
-from PIL import Image
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -13,11 +11,25 @@ st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", layout="wi
 # ---- Paths ----
 DATA_PATH = Path("data/processed/reduced_citibike_2022.csv")   # <=25MB sample
 MAP_HTMLS = [
+    Path("data/reports/map/citibike_trip_flows_2022.html"),
+    Path("data/reports/map/NYC_Bike_Trips_Aggregated.html"),
     Path("reports/map/citibike_trip_flows_2022.html"),
     Path("reports/map/NYC_Bike_Trips_Aggregated.html"),
 ]
 
-# ---- Helpers ----
+# ---- Small helpers (to avoid extra deps) ----
+def kfmt(x):
+    """Human-readable number formatting (e.g., 12.3K)."""
+    try:
+        x = float(x)
+    except Exception:
+        return "—"
+    for unit in ["", "K", "M", "B", "T"]:
+        if abs(x) < 1000:
+            return f"{x:,.0f}{unit}" if unit == "" else f"{x:.1f}{unit}"
+        x /= 1000.0
+    return f"{x:.1f}T"
+
 @st.cache_data
 def load_data(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path, low_memory=False)
@@ -48,13 +60,15 @@ def ensure_daily(df: pd.DataFrame) -> pd.DataFrame:
         # attach temperature if any column resembles it
         for cand in ["avg_temp_c","avgTemp","avg_temp","temperature_c"]:
             if cand in df.columns:
-                temp = df.groupby("date", as_index=False)[cand].mean().rename(columns={cand:"avg_temp_c"})
+                temp = (df.groupby("date", as_index=False)[cand]
+                          .mean()
+                          .rename(columns={cand:"avg_temp_c"}))
                 daily = daily.merge(temp, on="date", how="left")
                 break
     return daily
 
 def kpi(value, label):
-    st.metric(label=label, value=numerize.numerize(value) if pd.notnull(value) else "—")
+    st.metric(label=label, value=kfmt(value) if pd.notnull(value) else "—")
 
 # ---- Sidebar Navigation ----
 page = st.sidebar.selectbox(
@@ -98,7 +112,7 @@ This dashboard synthesizes **Citi Bike NYC usage** to answer a simple question:
     # Optional hero image (place your own and credit it)
     hero_path = Path("data/reports/cover_bike.jpg")
     if hero_path.exists():
-        st.image(Image.open(hero_path), use_column_width=True, caption="Photo credit: your source here")
+        st.image(hero_path.as_posix(), use_column_width=True, caption="Photo credit: your source here")
 
 # 2) Weather vs Bike Usage (dual-axis)
 elif page == "Weather vs Bike Usage":
@@ -140,7 +154,6 @@ elif page == "Weather vs Bike Usage":
         fig.update_yaxes(title_text="Bike Rides (count)", secondary_y=False)
         st.plotly_chart(fig, use_container_width=True)
 
-        # Interpretation (feel free to tweak for your data)
         st.markdown("""
 **Interpretation (for non-technical stakeholders):**  
 Bike usage **surges in warm months (≈ May–Oct)** and drops in winter—clear **seasonality**. Spikes in rides tend to **track warmer days**, so **inventory and rebalancing** should **scale up in summer**, especially on **weekends and warm weekdays**.
@@ -198,14 +211,13 @@ Demand concentrates at a **small set of hubs** (waterfront/Midtown/dense commute
 # 4) Kepler.gl Map (HTML embed)
 elif page == "Interactive Trip Flows Map":
     st.header("Interactive Map — Aggregated Trip Flows")
-    path_to_html = None
-    for p in MAP_HTMLS:
-        if p.exists():
-            path_to_html = p
-            break
+    path_to_html = next((p for p in MAP_HTMLS if p.exists()), None)
     if not path_to_html:
-        st.error("Kepler.gl HTML not found. Export your flow map to:\n"
-                 "data/reports/map/citibike_trip_flows_2022.html")
+        st.error(
+            "Kepler.gl HTML not found. Export your flow map to either:\n"
+            "• data/reports/map/citibike_trip_flows_2022.html\n"
+            "• reports/map/citibike_trip_flows_2022.html"
+        )
     else:
         with open(path_to_html, "r", encoding="utf-8") as f:
             html_data = f.read()
@@ -281,4 +293,3 @@ elif page == "Recommendations":
 - **User wait/empty-dock complaints** ↓ 30% MoM  
 - **Truck miles per rebalanced bike** ↓ 15% (efficiency)
     """)
-
