@@ -1,0 +1,7 @@
+[theme]
+base = "light"
+primaryColor = "#0E76A8"            # accessible blue for buttons/accents
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F6F8FB" # sidebar / cards
+textColor = "#1F2937"
+font = "sans serif"
