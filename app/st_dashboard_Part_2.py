@@ -210,23 +210,27 @@ Demand concentrates at a **small set of hubs** (waterfront/Midtown/dense commute
 elif page == "Interactive Trip Flows Map":
     st.header("Interactive Map — Aggregated Trip Flows")
     path_to_html = next((p for p in MAP_HTMLS if p.exists()), None)
-    if not path_to_html:
-    st.error(
-        "Kepler.gl HTML not found. Export your flow map to:\n"
-        "• reports/map/citibike_trip_flows_2022.html\n"
-        "• reports/map/NYC_Bike_Trips_Aggregated.html"
-    )
-    else:
-        with open(path_to_html, "r", encoding="utf-8") as f:
-            html_data = f.read()
-        st.components.v1.html(html_data, height=900, scrolling=True)
 
-        st.markdown("""
+    if not path_to_html:
+        st.error(
+            "Kepler.gl HTML not found. Export your flow map to either:\n"
+            "• reports/map/citibike_trip_flows_2022.html\n"
+            "• reports/map/NYC_Bike_Trips_Aggregated.html"
+        )
+    else:
+        try:
+            with open(path_to_html, "r", encoding="utf-8") as f:
+                html_data = f.read()
+            st.components.v1.html(html_data, height=900, scrolling=True)
+
+            st.markdown("""
 **How to read this:**  
-Thick, bright corridors = **high-volume flows**. Looping arcs near the waterfront and central business districts suggest **commuter + recreational corridors**.
+Thick, bright corridors = **high-volume flows**. Looping arcs near the waterfront and CBD suggest **commuter + recreational corridors**.
 
 **Use:** Align **rebalancing routes** with these corridors, and stage **recovery trucks** near endpoints of repeated high-flow pairs.
-        """)
+            """)
+        except Exception as e:
+            st.error(f"Failed to load map HTML: {e}")
 
 # 5) Extra chart (pick one that helps supply decisions)
 elif page == "Extra: Weekday × Hour Heatmap":
@@ -291,5 +295,6 @@ elif page == "Recommendations":
 - **User wait/empty-dock complaints** ↓ 30% MoM  
 - **Truck miles per rebalanced bike** ↓ 15% (efficiency)
     """)
+
 
 
