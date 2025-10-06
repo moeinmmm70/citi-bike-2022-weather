@@ -11,8 +11,6 @@ st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", layout="wi
 # ---- Paths ----
 DATA_PATH = Path("data/processed/reduced_citibike_2022.csv")   # <=25MB sample
 MAP_HTMLS = [
-    Path("data/reports/map/citibike_trip_flows_2022.html"),
-    Path("data/reports/map/NYC_Bike_Trips_Aggregated.html"),
     Path("reports/map/citibike_trip_flows_2022.html"),
     Path("reports/map/NYC_Bike_Trips_Aggregated.html"),
 ]
@@ -110,9 +108,9 @@ This dashboard synthesizes **Citi Bike NYC usage** to answer a simple question:
 5. **Recommendations** — concrete, ops-ready actions
     """)
     # Optional hero image (place your own and credit it)
-    hero_path = Path("data/reports/cover_bike.jpg")
+    hero_path = Path("reports/cover_bike.jpg")
     if hero_path.exists():
-        st.image(hero_path.as_posix(), use_column_width=True, caption="Photo credit: your source here")
+        st.image(hero_path.as_posix(), use_column_width=True, caption="Photo credit: citibikenyc.com")
 
 # 2) Weather vs Bike Usage (dual-axis)
 elif page == "Weather vs Bike Usage":
@@ -213,11 +211,11 @@ elif page == "Interactive Trip Flows Map":
     st.header("Interactive Map — Aggregated Trip Flows")
     path_to_html = next((p for p in MAP_HTMLS if p.exists()), None)
     if not path_to_html:
-        st.error(
-            "Kepler.gl HTML not found. Export your flow map to either:\n"
-            "• data/reports/map/citibike_trip_flows_2022.html\n"
-            "• reports/map/citibike_trip_flows_2022.html"
-        )
+    st.error(
+        "Kepler.gl HTML not found. Export your flow map to:\n"
+        "• reports/map/citibike_trip_flows_2022.html\n"
+        "• reports/map/NYC_Bike_Trips_Aggregated.html"
+    )
     else:
         with open(path_to_html, "r", encoding="utf-8") as f:
             html_data = f.read()
@@ -293,3 +291,4 @@ elif page == "Recommendations":
 - **User wait/empty-dock complaints** ↓ 30% MoM  
 - **Truck miles per rebalanced bike** ↓ 15% (efficiency)
     """)
+
