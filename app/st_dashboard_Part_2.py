@@ -346,7 +346,8 @@ elif page == "Recommendations":
 - **Truck miles per rebalanced bike** ↓ 15%  
 - **On-time dock readiness** ≥ 90% (before AM peak)
 """)
-    st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
     
     st.markdown("> **Next** — Pilot these changes at the top 10 stations for 2 weeks; compare KPIs before/after.")
     st.caption("Limitations: sample size reduced for deployment; no direct inventory per dock; events/holidays not modeled.")
+    
+    st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
