@@ -180,10 +180,6 @@ elif page == "Most Popular Stations":
     else:
         st.info("No 'season' column; showing all data.")
         df1 = df.copy()
-        
-    if df1.empty:
-    st.info("No rows match the current season filter.")
-    st.stop()
     
     # KPI — total rides (trip-level) or sum of daily rides
     if "ride_id" in df1.columns:
@@ -317,3 +313,4 @@ elif page == "Recommendations":
 """)
 
 st.caption("Limitations: sample size reduced for deployment; no direct inventory per dock; events/holidays not modeled.")
+
