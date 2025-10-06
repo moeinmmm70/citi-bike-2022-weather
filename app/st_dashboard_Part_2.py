@@ -120,7 +120,7 @@ if page == "Intro":
 """)
     hero_path = Path("reports/cover_bike.webp")
     if hero_path.exists():
-        st.image(hero_path.as_posix(), use_column_width=True, caption="Photo credit: citibikenyc.com")
+        st.image(hero_path.as_posix(), use_column_width=True, caption="Citi Bike NYC (illustrative). Photo © citibikenyc.com", output_format="auto")
 
 # 2) Weather vs Bike Usage (dual-axis)
 elif page == "Weather vs Bike Usage":
@@ -348,3 +348,5 @@ elif page == "Recommendations":
 """)
     st.markdown("> **Next** — Pilot these changes at the top 10 stations for 2 weeks; compare KPIs before/after.")
     st.caption("Limitations: sample size reduced for deployment; no direct inventory per dock; events/holidays not modeled.")
+
+st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
