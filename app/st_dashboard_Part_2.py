@@ -347,8 +347,7 @@ st.markdown("""
 st.markdown("> **Next** — 🧪 Pilot at the top 10 stations for 2 weeks; compare KPIs before/after.")
 st.caption("🧱 Limitations: sample reduced for deployment; no per-dock inventory; events/holidays not modeled.")
 
-    
-    
-    st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
+st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
+
 
 
