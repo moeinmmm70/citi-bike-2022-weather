@@ -2,5 +2,5 @@ streamlit==1.38.0
 plotly==5.24.1
 pandas==2.2.2
 numpy==2.1.3
-streamlit_keplergl==0.3.0
 numerize==0.12
+
