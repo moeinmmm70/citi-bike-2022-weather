@@ -45,6 +45,8 @@ def load_data(path: Path) -> pd.DataFrame:
             return "Autumn"
         df["season"] = df["date"].dt.month.map(season_from_month)
     return df
+    
+df = load_data(DATA_PATH, DATA_PATH.stat().st_mtime)
 
 def ensure_daily(df: pd.DataFrame) -> pd.DataFrame:
     """Make sure we have daily metrics for line chart."""
@@ -90,6 +92,7 @@ df = load_data(DATA_PATH)
 
 st.sidebar.success("Data loaded")
 st.sidebar.write(f"Rows: {len(df):,}")
+st.sidebar.info("Using a reduced sample (≤25 MB) for deployment. Figures reflect the sample, not full-year totals.")
 
 # ---- Pages ----
 
@@ -97,17 +100,19 @@ st.sidebar.write(f"Rows: {len(df):,}")
 if page == "Intro":
     st.title("NYC Citi Bike — Strategy Dashboard")
     st.markdown("""
-This dashboard synthesizes **Citi Bike NYC usage** to answer a simple question:
-**Where and when do we face supply stress—and what should we do next?**
+**Purpose.** Identify **where and when** Citi Bike NYC faces **inventory stress**, and what to do about it.
 
-**What’s inside**
-1. **Weather vs Usage** — seasonality & demand swings  
-2. **Most Popular Stations** — hotspots to prioritize  
-3. **Interactive Flow Map** — main corridors & clusters  
-4. **Weekday × Hour Heatmap** — temporal load patterns  
-5. **Recommendations** — concrete, ops-ready actions
-    """)
-    # Optional hero image (place your own and credit it)
+**What this shows**
+1. **Weather vs. Usage** – seasonality & demand swings  
+2. **Most Popular Stations** – hotspots to prioritize  
+3. **Trip Flow Map** – corridors for efficient rebalancing  
+4. **Weekday × Hour Heatmap** – temporal load patterns  
+5. **Recommendations** – concrete, ops-ready actions
+
+**Data scope.** Reduced sample of Citi Bike trips + daily weather (≤25 MB) for deployment.  
+**Tip.** Use the left sidebar to switch pages and filter seasons.
+""")
+    # Hero image
     hero_path = Path("reports/cover_bike.webp")
     if hero_path.exists():
         st.image(hero_path.as_posix(), use_column_width=True, caption="Photo credit: citibikenyc.com")
@@ -148,14 +153,20 @@ elif page == "Weather vs Bike Usage":
             title="Daily Bike Rides vs Temperature — NYC",
             height=520, hovermode="x unified"
         )
+        fig.update_layout(title="Daily Bike Rides vs Temperature — NYC (Sample)")
         fig.update_xaxes(rangeslider_visible=True)
-        fig.update_yaxes(title_text="Bike Rides (count)", secondary_y=False)
+        fig.update_yaxes(title_text="Bike rides (count)", secondary_y=False)
+        fig.update_yaxes(title_text="Temperature (°C)", secondary_y=True)
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("""
-**Interpretation (for non-technical stakeholders):**  
-Bike usage **surges in warm months (≈ May–Oct)** and drops in winter—clear **seasonality**. Spikes in rides tend to **track warmer days**, so **inventory and rebalancing** should **scale up in summer**, especially on **weekends and warm weekdays**.
-        """)
+**Takeaway.** Usage **peaks in warm months (≈ May–Oct)** and dips in winter — clear **seasonality**.
+Warmer days often coincide with **higher ride volumes**.
+
+**So what?** Increase **dock stock + rebalancing windows** during warm months and on forecasted warm days.
+
+*Note.* This chart shows **association**, not causation. Always validate with operational constraints (events, holidays).
+""")
 
 # 3) Most Popular Stations (with season filter + KPI)
 elif page == "Most Popular Stations":
@@ -169,7 +180,11 @@ elif page == "Most Popular Stations":
     else:
         st.info("No 'season' column; showing all data.")
         df1 = df.copy()
-
+        
+    if df1.empty:
+    st.info("No rows match the current season filter.")
+    st.stop()
+    
     # KPI — total rides (trip-level) or sum of daily rides
     if "ride_id" in df1.columns:
         total = float(len(df1))
@@ -197,12 +212,14 @@ elif page == "Most Popular Stations":
         )
         fig.update_xaxes(tickangle=45, automargin=True)
         st.plotly_chart(fig, use_container_width=True)
+        fig.update_traces(text=top20["value"], textposition="outside", cliponaxis=False)
+        fig.update_layout(uniformtext_minsize=10, uniformtext_mode="hide", margin=dict(t=80))
 
         st.markdown("""
-**Interpretation:**  
-Demand concentrates at a **small set of hubs** (waterfront/Midtown/dense commute nodes).  
-**Implication:** Prioritize **dock capacity and rebalancing** at these hotspots during **peak seasons**.
-        """)
+**Takeaway.** Demand is **concentrated at a small set of hubs** (waterfront, Midtown, major commute nodes).
+
+**So what?** Prioritize **dock capacity** and **proactive rebalancing** at these stations, especially in **Summer** and during **commute peaks**.
+""")
     else:
         st.warning("Column 'start_station_name' not available in the sample.")
 
@@ -224,11 +241,13 @@ elif page == "Interactive Trip Flows Map":
             st.components.v1.html(html_data, height=900, scrolling=True)
 
             st.markdown("""
-**How to read this:**  
-Thick, bright corridors = **high-volume flows**. Looping arcs near the waterfront and CBD suggest **commuter + recreational corridors**.
+**How to use this map**
+- **Zoom & pan** to explore hot corridors.  
+- **Thicker/brighter** paths = higher flow.  
+- Look for **loops** connecting waterfront and CBD areas — classic commute + leisure routes.
 
-**Use:** Align **rebalancing routes** with these corridors, and stage **recovery trucks** near endpoints of repeated high-flow pairs.
-            """)
+**So what?** Align **truck routes** with these corridors and **stage vehicles** near endpoints of repeated high-flow pairs to cut miles and response time.
+""")
         except Exception as e:
             st.error(f"Failed to load map HTML: {e}")
 
@@ -252,6 +271,8 @@ elif page == "Extra: Weekday × Hour Heatmap":
             y=piv.index,
             coloraxis="coloraxis"
         ))
+        fig.update_xaxes(title_text="Start hour (0–23)")
+        fig.update_yaxes(title_text="Weekday")
         fig.update_layout(
             title="Starts by Weekday × Hour (Count)",
             height=600,
@@ -259,10 +280,12 @@ elif page == "Extra: Weekday × Hour Heatmap":
         )
         st.plotly_chart(fig, use_container_width=True)
         st.markdown("""
-**Interpretation:**  
-Weekday **AM/PM peaks** = commute demand; **weekend midday** = leisure.  
-**Action:** Match **dock stock** and **truck shifts** to these peaks; pre-load docks before rushes.
-        """)
+**Takeaway.** **AM/PM weekday peaks** align with commutes; **weekend midday** is leisure-driven.
+
+**So what?**  
+- Pre-load docks at **commute hubs** before **7–9 AM** and **5–7 PM**.  
+- Shift some rebalancing to **late evening** to prep for the next morning.
+""")
     else:
         st.info("No 'started_at' column in sample. For this chart, keep a small set of raw trips in the ≤25MB CSV.")
 
@@ -270,31 +293,27 @@ Weekday **AM/PM peaks** = commute demand; **weekend midday** = leisure.
 elif page == "Recommendations":
     st.header("Conclusion & Recommendations")
     st.markdown("""
-### What we learned
-- **Seasonality is strong**: demand surges **May–Oct**; troughs in winter.
-- **Hotspots are persistent**: a handful of stations dominate starts.
-- **Flow corridors** reveal **natural rebalancing routes**.
+### Recommendations (4–8 weeks)
 
-### What to do (next 4–8 weeks)
-1) **Scale capacity at hotspots**  
-   - +Dock capacity (temp/portable docks if permanent permits lag)  
-   - **Dynamic rebalancing windows** aligning to commute peaks
+1) **Scale hotspot capacity**  
+   - Add portable/temporary docks where feasible.  
+   - Target **≥85% fill at open (AM)** and **≥70% before PM peak** at top-20 stations.
 
-2) **Predictive stocking**  
-   - Use **temp + weekday** to forecast next-day docks per hub  
-   - Target **fill ≥85%** at opening for AM peaks; **≥70%** prior to PM peaks
+2) **Predictive stocking by weather + weekday**  
+   - Use simple regression or rules to set **next-day dock targets** by station.  
+   - Escalate stocking when **forecast highs ≥ 22 °C**.
 
-3) **Corridor-aligned logistics**  
-   - Stage trucks near **high-flow endpoints**; run **loop routes** not point-to-point
+3) **Corridor-aligned rebalancing**  
+   - Stage trucks at **repeated high-flow endpoints** and run **loop routes**.
 
-4) **Pilot incentives**  
-   - **Off-load credits** for returning bikes to under-stocked docks during peak hours
+4) **Rider incentives**  
+   - Credits for returns to **under-stocked docks** during commute windows.
 
-**KPIs for the next sprint:**  
-- **Dock-out rate** < 5% at top 20 stations during peaks  
-- **User wait/empty-dock complaints** ↓ 30% MoM  
-- **Truck miles per rebalanced bike** ↓ 15% (efficiency)
-    """)
+**KPIs**  
+- **Dock-out rate** < 5% at top-20 stations during AM/PM peaks  
+- **Empty/Full dock complaints** ↓ 30% MoM  
+- **Truck miles per rebalanced bike** ↓ 15%  
+- **On-time dock readiness** ≥ 90% (before AM peak)
+""")
 
-
-
+st.caption("Limitations: sample size reduced for deployment; no direct inventory per dock; events/holidays not modeled.")
