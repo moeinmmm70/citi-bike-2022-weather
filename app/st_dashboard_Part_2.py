@@ -45,8 +45,6 @@ def load_data(path: Path) -> pd.DataFrame:
             return "Autumn"
         df["season"] = df["date"].dt.month.map(season_from_month)
     return df
-    
-df = load_data(DATA_PATH, DATA_PATH.stat().st_mtime)
 
 def ensure_daily(df: pd.DataFrame) -> pd.DataFrame:
     """Make sure we have daily metrics for line chart."""
@@ -313,4 +311,5 @@ elif page == "Recommendations":
 """)
 
 st.caption("Limitations: sample size reduced for deployment; no direct inventory per dock; events/holidays not modeled.")
+
 
