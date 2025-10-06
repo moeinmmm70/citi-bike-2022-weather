@@ -77,15 +77,8 @@ def kpi(value, label):
 
 # ---- Sidebar Navigation ----
 page = st.sidebar.selectbox(
-    "Select an aspect of the analysis",
-    [
-        "Intro",
-        "Weather vs Bike Usage",
-        "Most Popular Stations",
-        "Interactive Trip Flows Map",
-        "Extra: Weekday × Hour Heatmap",
-        "Recommendations"
-    ]
+    "📑 Select an aspect of the analysis",
+    ["Intro","Weather vs Bike Usage","Most Popular Stations","Interactive Trip Flows Map","Extra: Weekday × Hour Heatmap","Recommendations"]
 )
 
 # ---- Load data ----
@@ -106,25 +99,26 @@ if page == "Intro":
     st.title("NYC Citi Bike — Strategy Dashboard")
     st.markdown("### ")
     st.markdown("""
-**Purpose** — Pinpoint **where/when** Citi Bike NYC faces **inventory stress** and what to do about it.
+**Purpose** — 🔎 Pinpoint **where/when** Citi Bike NYC faces **inventory stress** and what to do about it.
 
 **You’ll see**
-1. **Weather vs. Usage** — seasonality & demand swings  
-2. **Popular Stations** — hotspots to prioritize  
-3. **Trip Flow Map** — corridors for efficient rebalancing  
-4. **Weekday × Hour Heatmap** — temporal load patterns  
-5. **Recommendations** — concrete, ops-ready actions
+1. 🌤️ **Weather vs. Usage** — seasonality & demand swings  
+2. 🚉 **Popular Stations** — hotspots to prioritize  
+3. 🗺️ **Trip Flow Map** — corridors for efficient rebalancing  
+4. ⏰ **Weekday × Hour Heatmap** — temporal load patterns  
+5. 🚀 **Recommendations** — concrete, ops-ready actions
 
-**Scope** — Reduced sample of trips + daily weather (≤25 MB) to enable deployment.  
+**Scope** — 📦 Reduced sample of trips + daily weather (≤25 MB) to enable deployment.  
 **Tip** — Use the sidebar to switch pages and filter seasons.
 """)
+    
     hero_path = Path("reports/cover_bike.webp")
     if hero_path.exists():
         st.image(hero_path.as_posix(), use_column_width=True, caption="Citi Bike NYC. Photo © citibikenyc.com", output_format="auto")
 
 # 2) Weather vs Bike Usage (dual-axis)
 elif page == "Weather vs Bike Usage":
-    st.header("Daily Bike Rides vs Temperature (NYC)")
+    st.header("🌤️ Daily Bike Rides vs Temperature (NYC)")
     daily = ensure_daily(df)
     if daily is None or daily.empty:
         st.warning("Daily metrics are not available in the sample. Provide 'bike_rides_daily' or raw trip rows.")
@@ -171,16 +165,16 @@ elif page == "Weather vs Bike Usage":
 
         st.markdown("### ")
         st.markdown("""
-**Takeaway** — Usage **peaks May–Oct**, dips in winter—clear **seasonality**. Warmer days often align with **higher ride volumes**.
+**🔎 Takeaway** — Usage **peaks May–Oct**, dips in winter—clear **seasonality**. Warmer days often align with **higher ride volumes**.
 
-**Action** — Scale **dock stock & rebalancing windows** during warm months and on forecasted warm days.
+**✅ Action** — Scale **dock stock & rebalancing windows** during warm months and on forecasted warm days.
 
-*Note** — This shows **association**, not causation; account for events/holidays.
+**🧠 Note** — This shows **association**, not causation; account for events/holidays.
 """)
 
 # 3) Most Popular Stations (with season filter + KPI)
 elif page == "Most Popular Stations":
-    st.header("Top Start Stations — with Season Filter")
+    st.header("🚉 Top Start Stations — with Season Filter")
     # season filter
     if "season" in df.columns:
         with st.sidebar:
@@ -244,16 +238,17 @@ elif page == "Most Popular Stations":
 
         st.markdown("### ")
         st.markdown("""
-**Takeaway** — Demand concentrates at a **handful of hubs** (waterfront, Midtown, commute nodes).
+**🔎 Takeaway** — Demand concentrates at a **handful of hubs** (waterfront, Midtown, commute nodes).
 
-**Action** — Prioritize **dock capacity** and **proactive rebalancing** at these stations—especially in **summer** and **commute peaks**.
+**✅ Action** — Prioritize **dock capacity** and **proactive rebalancing** at these stations—especially in **summer** and **commute peaks**.
 """)
+
     else:
         st.warning("Column 'start_station_name' not available in the sample.")
 
 # 4) Kepler.gl Map (HTML embed)
 elif page == "Interactive Trip Flows Map":
-    st.header("Interactive Map — Aggregated Trip Flows")
+    st.header("🗺️ Interactive Map — Aggregated Trip Flows")
     path_to_html = next((p for p in MAP_HTMLS if p.exists()), None)
 
     if not path_to_html:
@@ -270,18 +265,19 @@ elif page == "Interactive Trip Flows Map":
 
             st.markdown("### ")
             st.markdown("""
-**Use this map**
-- **Zoom** to find thick/brighter paths (higher flow).  
-- Note **loops** between waterfront and CBD—commute + leisure corridors.
+**How to use this map**
+- 🧭 **Zoom & pan** to explore hot corridors.  
+- 🌊 Waterfront ↔ CBD **loops** often mix commute + leisure.
 
-**Action** — Align **truck loops** with these corridors and **stage vehicles** near repeated high-flow endpoints to cut miles and response time.
+**✅ Action** — Align **truck loops** with these corridors and **stage vehicles** near repeated high-flow endpoints.
 """)
+
         except Exception as e:
             st.error(f"Failed to load map HTML: {e}")
 
 # 5) Extra chart (Weekday × Hour Heatmap)
 elif page == "Extra: Weekday × Hour Heatmap":
-    st.header("Temporal Load — Weekday × Start Hour")
+    st.header("⏰ Temporal Load — Weekday × Start Hour")
     if "started_at" in df.columns:
         dt = pd.to_datetime(df["started_at"], errors="coerce")
         dfx = pd.DataFrame({
@@ -312,10 +308,11 @@ elif page == "Extra: Weekday × Hour Heatmap":
 
         st.markdown("### ")
         st.markdown("""
-**Takeaway** — **AM/PM weekday peaks** = commutes; **weekend midday** = leisure.
+**🔎 Takeaway** — **AM/PM weekday peaks** = commutes; **weekend midday** = leisure.
 
-**Action** — Pre-load commute hubs before **7–9 AM** and **5–7 PM**. Shift some rebalancing to **late evening** to prep for morning demand.
+**✅ Action** — Pre-load commute hubs before **7–9 AM** and **5–7 PM**. Shift some rebalancing to **late evening** to prep for morning demand.
 """)
+
     else:
         st.info("No 'started_at' column in sample. For this chart, keep a small set of raw trips in the ≤25MB CSV.")
 
@@ -323,32 +320,35 @@ elif page == "Extra: Weekday × Hour Heatmap":
 elif page == "Recommendations":
     st.header("Conclusion & Recommendations")
     st.markdown("### ")
-    st.markdown("""
+    st.header("🚀 Conclusion & Recommendations")
+st.markdown("""
 ### Recommendations (4–8 weeks)
 
 1) **Scale hotspot capacity**  
-   - Add portable/temporary docks where feasible.  
-   - Target **≥85% fill at open (AM)** and **≥70% before PM peak** at top-20 stations.
+   - 🧱 Portable/temporary docks where feasible.  
+   - 🎯 Target **≥85% fill at open (AM)** and **≥70% before PM peak** at top-20 stations.
 
-2) **Predictive stocking by weather + weekday**  
-   - Use simple regression or rules to set **next-day dock targets** by station.  
-   - Escalate stocking when **forecast highs ≥ 22 °C**.
+2) **Predictive stocking: weather + weekday**  
+   - 📈 Simple regression/rules for **next-day dock targets** by station.  
+   - 🌡️ Escalate stocking when **forecast highs ≥ 22 °C**.
 
 3) **Corridor-aligned rebalancing**  
-   - Stage trucks at **repeated high-flow endpoints** and run **loop routes**.
+   - 🚚 Stage trucks at **repeated high-flow endpoints**; run **loop routes**.
 
 4) **Rider incentives**  
-   - Credits for returns to **under-stocked docks** during commute windows.
+   - 🎟️ Credits for returns to **under-stocked docks** during commute windows.
 
 **KPIs**  
-- **Dock-out rate** < 5% at top-20 stations during AM/PM peaks  
-- **Empty/Full dock complaints** ↓ 30% MoM  
-- **Truck miles per rebalanced bike** ↓ 15%  
-- **On-time dock readiness** ≥ 90% (before AM peak)
+- ⛔ **Dock-out rate** < 5% at top-20 stations during peaks  
+- 📉 **Empty/Full dock complaints** ↓ 30% MoM  
+- 🛣️ **Truck miles per rebalanced bike** ↓ 15%  
+- ⏱️ **On-time dock readiness** ≥ 90% (before AM peak)
 """)
+st.markdown("> **Next** — 🧪 Pilot at the top 10 stations for 2 weeks; compare KPIs before/after.")
+st.caption("🧱 Limitations: sample reduced for deployment; no per-dock inventory; events/holidays not modeled.")
+
     
-    st.markdown("> **Next** — Pilot these changes at the top 10 stations for 2 weeks; compare KPIs before/after.")
-    st.caption("Limitations: sample size reduced for deployment; no direct inventory per dock; events/holidays not modeled.")
     
     st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
+
 
