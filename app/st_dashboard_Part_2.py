@@ -5,12 +5,22 @@ import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-
-st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", page_icon="🚲", layout="wide")
 import plotly.io as pio
+
+# --- Page + Plotly theme ---
+st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", page_icon="🚲", layout="wide")
 pio.templates.default = "plotly_white"
 
-st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", layout="wide")
+# --- Paths ---
+DATA_PATH = Path("data/processed/reduced_citibike_2022.csv")   # <=25MB sample
+MAP_HTMLS = [
+    Path("reports/map/citibike_trip_flows_2022.html"),
+    Path("reports/map/NYC_Bike_Trips_Aggregated.html"),
+]
+
+# --- Colors (defined once, not between if/elif) ---
+RIDES_COLOR = "#0072B2"   # colorblind-safe blue
+TEMP_COLOR  = "#D55E00"   # vermillion
 
 # ---- Small helpers (to avoid extra deps) ----
 def kfmt(x):
@@ -83,7 +93,7 @@ if not DATA_PATH.exists():
     st.error(f"Data file not found: {DATA_PATH}. Please create the ≤25MB sample first.")
     st.stop()
 
-df = load_data(DATA_PATH)
+df = load_data(DATA_PATH, DATA_PATH.stat().st_mtime)
 
 st.sidebar.success("Data loaded")
 st.sidebar.write(f"Rows: {len(df):,}")
@@ -108,18 +118,11 @@ if page == "Intro":
 **Scope** — Reduced sample of trips + daily weather (≤25 MB) to enable deployment.  
 **Tip** — Use the sidebar to switch pages and filter seasons.
 """)
-    
-    # Hero image
     hero_path = Path("reports/cover_bike.webp")
     if hero_path.exists():
         st.image(hero_path.as_posix(), use_column_width=True, caption="Photo credit: citibikenyc.com")
 
 # 2) Weather vs Bike Usage (dual-axis)
-
-# Colors
-rides_color = "#0072B2"   # blue
-temp_color  = "#D55E00"   # vermillion
-
 elif page == "Weather vs Bike Usage":
     st.header("Daily Bike Rides vs Temperature (NYC)")
     daily = ensure_daily(df)
@@ -133,51 +136,46 @@ elif page == "Weather vs Bike Usage":
             go.Scatter(
                 x=daily["date"], y=daily["bike_rides_daily"],
                 mode="lines", name="Daily Bike Rides",
-                line=dict(width=2, color=rides_color)
+                line=dict(width=2, color=RIDES_COLOR)
             ),
             secondary_y=False
         )
-
         # right axis: temp (if available)
         if "avg_temp_c" in daily.columns and daily["avg_temp_c"].notna().any():
             fig.add_trace(
                 go.Scatter(
                     x=daily["date"], y=daily["avg_temp_c"],
                     mode="lines", name="Daily Temperature (°C)",
-                    line=dict(width=2, dash="dot", color=temp_color)
+                    line=dict(width=2, dash="dot", color=TEMP_COLOR)
                 ),
                 secondary_y=True
             )
-
-            fig.update_traces(hovertemplate="%{x|%Y-%m-%d}<br>Rides: %{y:,}",
-                  selector=dict(name="Daily Bike Rides"))
-            fig.update_traces(hovertemplate="%{x|%Y-%m-%d}<br>Temp: %{y:.1f} °C",
-                  selector=dict(name="Daily Temperature (°C)"))
-            
             fig.update_yaxes(title_text="Temperature (°C)", secondary_y=True)
         else:
             st.info("No temperature column found in sample; showing rides only.")
 
+        # hovers & layout
+        fig.update_traces(hovertemplate="%{x|%Y-%m-%d}<br>Rides: %{y:,}",
+                          selector=dict(name="Daily Bike Rides"))
+        fig.update_traces(hovertemplate="%{x|%Y-%m-%d}<br>Temp: %{y:.1f} °C",
+                          selector=dict(name="Daily Temperature (°C)"))
         fig.update_layout(
-            title="Daily Bike Rides vs Temperature — NYC",
-            height=520, hovermode="x unified"
+            title="Daily Bike Rides vs Temperature — NYC (Sample)",
+            height=520,
+            hovermode="x unified",
+            legend=dict(orientation="h", y=1.1)
         )
-        fig.update_layout(title="Daily Bike Rides vs Temperature — NYC (Sample)")
-        fig.update_xaxes(rangeslider_visible=True)
-        fig.update_yaxes(title_text="Bike rides (count)", secondary_y=False)
-        fig.update_yaxes(title_text="Temperature (°C)", secondary_y=True)
-        fig.update_layout(hovermode="x unified", legend=dict(orientation="h", y=1.1))
-        fig.update_xaxes(showgrid=False)
-        fig.update_yaxes(showgrid=True, gridcolor="rgba(0,0,0,0.06)")
+        fig.update_xaxes(rangeslider_visible=True, showgrid=False)
+        fig.update_yaxes(title_text="Bike rides (count)", secondary_y=False, showgrid=True, gridcolor="rgba(0,0,0,0.06)")
         st.plotly_chart(fig, use_container_width=True)
-        
+
         st.markdown("### ")
         st.markdown("""
 **Takeaway** — Usage **peaks May–Oct**, dips in winter—clear **seasonality**. Warmer days often align with **higher ride volumes**.
 
 **Action** — Scale **dock stock & rebalancing windows** during warm months and on forecasted warm days.
 
-*Note* — This shows **association**, not causation; account for events/holidays.
+*Note** — This shows **association**, not causation; account for events/holidays.
 """)
 
 # 3) Most Popular Stations (with season filter + KPI)
@@ -192,7 +190,7 @@ elif page == "Most Popular Stations":
     else:
         st.info("No 'season' column; showing all data.")
         df1 = df.copy()
-    
+
     # KPI — total rides (trip-level) or sum of daily rides
     if "ride_id" in df1.columns:
         total = float(len(df1))
@@ -200,7 +198,20 @@ elif page == "Most Popular Stations":
         total = float(df1["bike_rides_daily"].sum())
     else:
         total = np.nan
-    kpi(total, "Total Bike Rides (filtered)")
+
+    # KPI row
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        kpi(total, "Total rides (filtered)")
+    with c2:
+        kpi(df1['start_station_name'].nunique() if "start_station_name" in df1 else "—", "Active start stations")
+    with c3:
+        kpi(len(df1['date'].unique()) if "date" in df1 else "—", "Days covered")
+
+    # guard for empty after filter
+    if df1.empty:
+        st.info("No rows match the current season filter.")
+        st.stop()
 
     # Bar chart
     if "start_station_name" in df1.columns:
@@ -213,37 +224,30 @@ elif page == "Most Popular Stations":
                 marker=dict(color="#0E76A8")
             )
         )
-        
-        fig.update_traces(text=top20["value"], textposition="outside", cliponaxis=False)
-        fig.update_traces(hovertemplate="<b>%{x}</b><br>Trips: %{y:,}<extra></extra>")
-
-        fig.update_layout(legend=dict(orientation="h", y=1.1))
-        fig.update_xaxes(showgrid=False)  # cleaner x-axis for bars
-        fig.update_yaxes(showgrid=True, gridcolor="rgba(0,0,0,0.06)")
-        fig.update_xaxes(tickangle=45, automargin=True
-
+        # labels and hover
+        fig.update_traces(text=top20["value"].map("{:,}".format),
+                          textposition="outside", cliponaxis=False,
+                          hovertemplate="<b>%{x}</b><br>Trips: %{y:,}<extra></extra>")
+        # layout and axes
         fig.update_layout(
             title="Top 20 Most Popular Start Stations (Filtered)",
             xaxis_title="Start station",
             yaxis_title="Trips (count)",
-            height=600
+            height=600,
+            uniformtext_minsize=10, uniformtext_mode="hide",
+            margin=dict(t=80),
+            legend=dict(orientation="h", y=1.1)
         )
-        fig.update_layout(uniformtext_minsize=10, uniformtext_mode="hide", margin=dict(t=80))
-        
+        fig.update_xaxes(tickangle=45, automargin=True, showgrid=False)
+        fig.update_yaxes(showgrid=True, gridcolor="rgba(0,0,0,0.06)")
         st.plotly_chart(fig, use_container_width=True)
 
-        c1, c2, c3 = st.columns(3)
-        with c1: kpi(total, "Total rides (filtered)")
-            with c2: kpi(df1['start_station_name'].nunique() if "start_station_name" in df1 else "—", "Active start stations")
-                with c3: kpi(len(df1['date'].unique()) if "date" in df1 else "—", "Days covered")
-        
         st.markdown("### ")
         st.markdown("""
 **Takeaway** — Demand concentrates at a **handful of hubs** (waterfront, Midtown, commute nodes).
 
 **Action** — Prioritize **dock capacity** and **proactive rebalancing** at these stations—especially in **summer** and **commute peaks**.
 """)
-
     else:
         st.warning("Column 'start_station_name' not available in the sample.")
 
@@ -272,11 +276,10 @@ elif page == "Interactive Trip Flows Map":
 
 **Action** — Align **truck loops** with these corridors and **stage vehicles** near repeated high-flow endpoints to cut miles and response time.
 """)
-
         except Exception as e:
             st.error(f"Failed to load map HTML: {e}")
 
-# 5) Extra chart (pick one that helps supply decisions)
+# 5) Extra chart (Weekday × Hour Heatmap)
 elif page == "Extra: Weekday × Hour Heatmap":
     st.header("Temporal Load — Weekday × Start Hour")
     if "started_at" in df.columns:
@@ -296,20 +299,15 @@ elif page == "Extra: Weekday × Hour Heatmap":
             y=piv.index,
             coloraxis="coloraxis"
         ))
-
         fig.update_traces(hovertemplate="Weekday: %{y}<br>Hour: %{x}<br>Starts: %{z:,}<extra></extra>")
-        fig.update_xaxes(title_text="Start hour (0–23)")
-        fig.update_yaxes(title_text="Weekday")
-        fig.update_layout(legend=dict(orientation="h", y=1.1))
-        fig.update_xaxes(showgrid=False)
-        fig.update_yaxes(showgrid=True, gridcolor="rgba(0,0,0,0.06)")
-        
+        fig.update_xaxes(title_text="Start hour (0–23)", showgrid=False)
+        fig.update_yaxes(title_text="Weekday", showgrid=True, gridcolor="rgba(0,0,0,0.06)")
         fig.update_layout(
             title="Starts by Weekday × Hour (Count)",
             height=600,
-            coloraxis=dict(colorscale="Viridis")
+            coloraxis=dict(colorscale="Viridis"),
+            legend=dict(orientation="h", y=1.1)
         )
-        
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("### ")
@@ -318,14 +316,12 @@ elif page == "Extra: Weekday × Hour Heatmap":
 
 **Action** — Pre-load commute hubs before **7–9 AM** and **5–7 PM**. Shift some rebalancing to **late evening** to prep for morning demand.
 """)
-
     else:
         st.info("No 'started_at' column in sample. For this chart, keep a small set of raw trips in the ≤25MB CSV.")
 
 # 6) Recommendations
 elif page == "Recommendations":
     st.header("Conclusion & Recommendations")
-
     st.markdown("### ")
     st.markdown("""
 ### Recommendations (4–8 weeks)
@@ -350,11 +346,5 @@ elif page == "Recommendations":
 - **Truck miles per rebalanced bike** ↓ 15%  
 - **On-time dock readiness** ≥ 90% (before AM peak)
 """)
-
-st.markdown("> **Next** — Pilot these changes at the top 10 stations for 2 weeks; compare KPIs before/after.")
-
-st.caption("Limitations: sample size reduced for deployment; no direct inventory per dock; events/holidays not modeled.")
-
-
-
-
+    st.markdown("> **Next** — Pilot these changes at the top 10 stations for 2 weeks; compare KPIs before/after.")
+    st.caption("Limitations: sample size reduced for deployment; no direct inventory per dock; events/holidays not modeled.")
