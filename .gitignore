@@ -1,0 +1,10 @@
+# data
+data/raw/
+data/processed/*.parquet
+data/processed/*full*.csv
+*.zip
+# notebooks junk
+**/.ipynb_checkpoints/
+# OS
+.DS_Store
+Thumbs.db
