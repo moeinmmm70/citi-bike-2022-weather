@@ -1,7 +1,7 @@
 [theme]
-base = "light"
-primaryColor = "#0E76A8"            # accessible blue for buttons/accents
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F6F8FB" # sidebar / cards
-textColor = "#1F2937"
-font = "sans serif"
+base = "dark"
+primaryColor = "#72B7FF"
+backgroundColor = "#0D1117"
+secondaryBackgroundColor = "#161B22"
+textColor = "#E6EDF3"
+font = "dubai"
