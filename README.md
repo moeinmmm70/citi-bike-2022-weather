@@ -11,7 +11,9 @@ It combines CitiBike trip data with NOAA weather data and produces daily aggrega
   - [`raw/`](data/raw/) – Raw trip and weather files *(ignored in git; placeholder tracked as `.gitkeep`)*
   - [`processed/`](data/processed/) – Cleaned & merged datasets *(only key file tracked; placeholder `.gitkeep`)*
 - [`notebooks/`](notebooks/) – Jupyter notebooks for downloading, cleaning, merging
-- [`reports/`](reports/) – Visualizations and summary outputs
+- [`app/`](app/)
+- [`reports/`](reports/)
+  - [`map/`](map/)    – Visualizations and summary outputs
 - [`README.md`](README.md) – Project documentation
 - [`.gitignore`](.gitignore) – Ignore rules for large data
 
