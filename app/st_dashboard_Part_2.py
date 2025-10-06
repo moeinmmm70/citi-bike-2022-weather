@@ -321,7 +321,7 @@ elif page == "Recommendations":
     st.header("Conclusion & Recommendations")
     st.markdown("### ")
     st.header("🚀 Conclusion & Recommendations")
-st.markdown("""
+    st.markdown("""
 ### Recommendations (4–8 weeks)
 
 1) **Scale hotspot capacity**  
@@ -344,12 +344,13 @@ st.markdown("""
 - 🛣️ **Truck miles per rebalanced bike** ↓ 15%  
 - ⏱️ **On-time dock readiness** ≥ 90% (before AM peak)
 """)
-st.markdown("> **Next** — 🧪 Pilot at the top 10 stations for 2 weeks; compare KPIs before/after.")
-st.caption("🧱 Limitations: sample reduced for deployment; no per-dock inventory; events/holidays not modeled.")
+    st.markdown("> **Next** — 🧪 Pilot at the top 10 stations for 2 weeks; compare KPIs before/after.")
+    st.caption("🧱 Limitations: sample reduced for deployment; no per-dock inventory; events/holidays not modeled.")
 
     st.markdown("### ")
     st.markdown("### ")
     st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
+
 
 
 
