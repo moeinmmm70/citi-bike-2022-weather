@@ -13,8 +13,8 @@ st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", layout="wi
 # ---- Paths ----
 DATA_PATH = Path("data/processed/reduced_citibike_2022.csv")   # <=25MB sample
 MAP_HTMLS = [
-    Path("data/reports/map/citibike_trip_flows_2022.html"),
-    Path("data/reports/map/NYC_Bike_Trips_Aggregated.html"),
+    Path("reports/map/citibike_trip_flows_2022.html"),
+    Path("reports/map/NYC_Bike_Trips_Aggregated.html"),
 ]
 
 # ---- Helpers ----
@@ -281,3 +281,4 @@ elif page == "Recommendations":
 - **User wait/empty-dock complaints** ↓ 30% MoM  
 - **Truck miles per rebalanced bike** ↓ 15% (efficiency)
     """)
+
