@@ -108,7 +108,7 @@ This dashboard synthesizes **Citi Bike NYC usage** to answer a simple question:
 5. **Recommendations** — concrete, ops-ready actions
     """)
     # Optional hero image (place your own and credit it)
-    hero_path = Path("reports/cover_bike.jpg")
+    hero_path = Path("reports/cover_bike.webp")
     if hero_path.exists():
         st.image(hero_path.as_posix(), use_column_width=True, caption="Photo credit: citibikenyc.com")
 
@@ -291,4 +291,5 @@ elif page == "Recommendations":
 - **User wait/empty-dock complaints** ↓ 30% MoM  
 - **Truck miles per rebalanced bike** ↓ 15% (efficiency)
     """)
+
 
