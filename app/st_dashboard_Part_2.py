@@ -19,26 +19,25 @@ st_html("""
 <style>
 :root { --app-font: 'Source Sans 3', system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, 'Helvetica Neue', Arial, sans-serif; }
 
-/* Blanket override with high specificity */
-html, body, .stApp, .block-container, [data-testid="stAppViewContainer"],
-[data-testid="stSidebar"], [data-testid="stSidebar"] *,
-[data-testid="stMarkdownContainer"], [data-testid="stMarkdownContainer"] *,
-[class^="css-"], [class*=" css-"] {
+/* Blanket override inside Streamlit app */
+.stApp, .stApp *:not(i):not([class*="fa"]) {
   font-family: var(--app-font) !important;
 }
 
 /* Headings */
 h1, h2, h3, h4, h5, h6 {
-  font-family: var(--app-font) !important;
   font-weight: 700 !important;
   letter-spacing: .2px;
 }
 
-/* Metrics / tabs / inputs */
-[data-testid="stMetricValue"], [data-baseweb="tab"], [role="tab"],
-input, textarea, button, select {
+/* Sidebar & metrics */
+section[data-testid="stSidebar"] * { font-family: var(--app-font) !important; }
+[data-testid="stMetricValue"] { font-variant-numeric: tabular-nums; }
+
+/* Force Plotly SVG text to use our font */
+.js-plotly-plot .plotly .main-svg text, 
+.js-plotly-plot .plotly .main-svg tspan {
   font-family: var(--app-font) !important;
-  font-variant-numeric: tabular-nums;
 }
 </style>
 """, height=0)
@@ -46,7 +45,7 @@ input, textarea, button, select {
 # Match Plotly figures to the app font
 pio.templates.default = "plotly_white"
 try:
-    pio.templates["plotly_white"].layout.font.family = \
+    pio.templates[pio.templates.default].layout.font.family = \
         "Source Sans 3, system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, 'Helvetica Neue', Arial, sans-serif"
 except Exception:
     pass
@@ -388,6 +387,7 @@ elif page == "Recommendations":
     st.markdown("### ")
     st.markdown("### ")
     st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
+
 
 
 
