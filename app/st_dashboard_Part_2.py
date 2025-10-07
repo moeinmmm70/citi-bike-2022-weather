@@ -10,22 +10,45 @@ import plotly.io as pio
 # --- Page + Plotly theme ---
 st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", page_icon="🚲", layout="wide")
 
+# 1) Load a very distinct Google Font (try Source Sans 3 so you can see the change clearly)
 st.markdown("""
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
-:root { --app-font: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, 'Helvetica Neue', Arial, sans-serif; }
-html, body, .stApp, [class^="css"] { font-family: var(--app-font) !important; }
-h1, h2, h3, h4, h5 { font-weight: 700 !important; letter-spacing: .2px; }
-section[data-testid="stSidebar"] * { font-family: var(--app-font) !important; }
-[data-testid="stMetricValue"] { font-variant-numeric: tabular-nums; }
+:root { --app-font: 'Source Sans 3', system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, 'Helvetica Neue', Arial, sans-serif; }
+
+/* Blanket override with high specificity */
+html, body, .stApp, .block-container, [data-testid="stAppViewContainer"],
+[data-testid="stSidebar"], [data-testid="stSidebar"] * ,
+[data-testid="stMarkdownContainer"], [data-testid="stMarkdownContainer"] *,
+[class^="css-"], [class*=" css-"] {
+  font-family: var(--app-font) !important;
+}
+
+/* Headings */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--app-font) !important;
+  font-weight: 700 !important;
+  letter-spacing: .2px;
+}
+
+/* Metrics / tabs / inputs often need a nudge */
+[data-testid="stMetricValue"], [data-baseweb="tab"], [role="tab"], input, textarea, button, select {
+  font-family: var(--app-font) !important;
+  font-variant-numeric: tabular-nums;
+}
 </style>
 """, unsafe_allow_html=True)
 
-pio.templates.default = "plotly_white"
-pio.templates["plotly_white"].layout.font.family = "Inter, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, 'Helvetica Neue', Arial, sans-serif"
-# (Or per-figure: fig.update_layout(font_family="Inter"))
+# 2) Match Plotly’s font to the app
+pio.templates.default = "plotly_white"  # or your preferred template
+try:
+    pio.templates["plotly_white"].layout.font.family = "Source Sans 3, system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, 'Helvetica Neue', Arial, sans-serif"
+except Exception:
+    pass
+# (Per-figure fallback)
+# fig.update_layout(font_family="Source Sans 3")
 
 # --- Paths ---
 DATA_PATH = Path("data/processed/reduced_citibike_2022.csv")   # <=25MB sample
@@ -364,6 +387,7 @@ elif page == "Recommendations":
     st.markdown("### ")
     st.markdown("### ")
     st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
+
 
 
 
