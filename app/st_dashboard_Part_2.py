@@ -9,7 +9,23 @@ import plotly.io as pio
 
 # --- Page + Plotly theme ---
 st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", page_icon="🚲", layout="wide")
+
+st.markdown("""
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root { --app-font: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, 'Helvetica Neue', Arial, sans-serif; }
+html, body, .stApp, [class^="css"] { font-family: var(--app-font) !important; }
+h1, h2, h3, h4, h5 { font-weight: 700 !important; letter-spacing: .2px; }
+section[data-testid="stSidebar"] * { font-family: var(--app-font) !important; }
+[data-testid="stMetricValue"] { font-variant-numeric: tabular-nums; }
+</style>
+""", unsafe_allow_html=True)
+
 pio.templates.default = "plotly_white"
+pio.templates["plotly_white"].layout.font.family = "Inter, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, 'Helvetica Neue', Arial, sans-serif"
+# (Or per-figure: fig.update_layout(font_family="Inter"))
 
 # --- Paths ---
 DATA_PATH = Path("data/processed/reduced_citibike_2022.csv")   # <=25MB sample
@@ -348,6 +364,7 @@ elif page == "Recommendations":
     st.markdown("### ")
     st.markdown("### ")
     st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
+
 
 
 
