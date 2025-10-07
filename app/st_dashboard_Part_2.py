@@ -10,38 +10,6 @@ import plotly.io as pio
 # --- Page + Plotly theme ---
 st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", page_icon="🚲", layout="wide")
 
-# ---- Global font injection (Google Fonts) ----
-st.markdown("""
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet">
-<style>
-:root { --app-font: 'Source Sans 3', system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, 'Helvetica Neue', Arial, sans-serif; }
-
-/* Blanket override with high specificity */
-html, body, .stApp, .block-container, [data-testid="stAppViewContainer"],
-[data-testid="stSidebar"], [data-testid="stSidebar"] *,
-[data-testid="stMarkdownContainer"], [data-testid="stMarkdownContainer"] *,
-[class^="css-"], [class*=" css-"] {
-  font-family: var(--app-font) !important;
-}
-
-/* Headings */
-h1, h2, h3, h4, h5, h6 {
-  font-family: var(--app-font) !important;
-  font-weight: 700 !important;
-  letter-spacing: .2px;
-}
-
-/* Metrics / tabs / inputs */
-[data-testid="stMetricValue"], [data-baseweb="tab"], [role="tab"],
-input, textarea, button, select {
-  font-family: var(--app-font) !important;
-  font-variant-numeric: tabular-nums;
-}
-</style>
-""", unsafe_allow_html=True)
-
 # Match Plotly figures to the app font
 pio.templates.default = "plotly_white"  # or "plotly_dark" if you prefer
 try:
@@ -388,6 +356,7 @@ elif page == "Recommendations":
     st.markdown("### ")
     st.markdown("### ")
     st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
+
 
 
 
