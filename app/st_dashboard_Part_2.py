@@ -10,7 +10,7 @@ import plotly.io as pio
 # --- Page + Plotly theme ---
 st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", page_icon="🚲", layout="wide")
 
-# 1) Load a very distinct Google Font (try Source Sans 3 so you can see the change clearly)
+# ---- Global font injection (Google Fonts) ----
 st.markdown("""
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -20,7 +20,7 @@ st.markdown("""
 
 /* Blanket override with high specificity */
 html, body, .stApp, .block-container, [data-testid="stAppViewContainer"],
-[data-testid="stSidebar"], [data-testid="stSidebar"] * ,
+[data-testid="stSidebar"], [data-testid="stSidebar"] *,
 [data-testid="stMarkdownContainer"], [data-testid="stMarkdownContainer"] *,
 [class^="css-"], [class*=" css-"] {
   font-family: var(--app-font) !important;
@@ -33,22 +33,23 @@ h1, h2, h3, h4, h5, h6 {
   letter-spacing: .2px;
 }
 
-/* Metrics / tabs / inputs often need a nudge */
-[data-testid="stMetricValue"], [data-baseweb="tab"], [role="tab"], input, textarea, button, select {
+/* Metrics / tabs / inputs */
+[data-testid="stMetricValue"], [data-baseweb="tab"], [role="tab"],
+input, textarea, button, select {
   font-family: var(--app-font) !important;
   font-variant-numeric: tabular-nums;
 }
 </style>
 """, unsafe_allow_html=True)
 
-# 2) Match Plotly’s font to the app
-pio.templates.default = "plotly_white"  # or your preferred template
+# Match Plotly figures to the app font
+pio.templates.default = "plotly_white"  # or "plotly_dark" if you prefer
 try:
-    pio.templates["plotly_white"].layout.font.family = "Source Sans 3, system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, 'Helvetica Neue', Arial, sans-serif"
+    pio.templates[pio.templates.default].layout.font.family = \
+        "Source Sans 3, system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, 'Helvetica Neue', Arial, sans-serif"
 except Exception:
     pass
-# (Per-figure fallback)
-# fig.update_layout(font_family="Source Sans 3")
+# (Per-figure fallback: fig.update_layout(font_family="Source Sans 3"))
 
 # --- Paths ---
 DATA_PATH = Path("data/processed/reduced_citibike_2022.csv")   # <=25MB sample
@@ -387,6 +388,7 @@ elif page == "Recommendations":
     st.markdown("### ")
     st.markdown("### ")
     st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
+
 
 
 
