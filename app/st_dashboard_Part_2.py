@@ -48,7 +48,7 @@ try:
 except Exception:
     pass
 # (Per-figure fallback)
-# fig.update_layout(font_family="Source Sans 3")
+fig.update_layout(font_family="Source Sans 3")
 
 # --- Paths ---
 DATA_PATH = Path("data/processed/reduced_citibike_2022.csv")   # <=25MB sample
@@ -387,6 +387,7 @@ elif page == "Recommendations":
     st.markdown("### ")
     st.markdown("### ")
     st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
+
 
 
 
