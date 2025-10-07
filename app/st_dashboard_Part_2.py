@@ -317,7 +317,6 @@ elif page == "Extra: Weekday × Hour Heatmap":
 
 # 6) Recommendations
 elif page == "Recommendations":
-    st.header("Conclusion & Recommendations")
     st.markdown("### ")
     st.header("🚀 Conclusion & Recommendations")
     st.markdown("""
@@ -349,6 +348,7 @@ elif page == "Recommendations":
     st.markdown("### ")
     st.markdown("### ")
     st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
+
 
 
 
