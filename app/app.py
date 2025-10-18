@@ -1,6 +1,5 @@
 # app/st_dashboard_Part_2.py
 from pathlib import Path
-import math
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -91,7 +90,7 @@ def load_data(path: Path, _sig: float | None = None) -> pd.DataFrame:
             df["precip_bin"] = df["precip_bin"].astype("category")
             break
 
-    # Derive a very light Comfort Index if feasible (higher = nicer)
+    # Very light Comfort Index (higher = nicer), if feasible
     temp_candidates = ["avg_temp_c", "avgTemp", "avg_temp", "temperature_c"]
     wind_candidates = ["wind_kph", "wind_speed_kph", "wind_mps"]
     hum_candidates  = ["humidity", "rel_humidity"]
@@ -174,10 +173,6 @@ def linear_fit(x: pd.Series, y: pd.Series):
     a, b = np.polyfit(x, y, 1)
     return float(a), float(b), (lambda z: a * np.asarray(z) + b)
 
-def kpi(value, label, delta=None):
-    st.metric(label=label, value=kfmt(value) if pd.notnull(value) else "—",
-              delta=(f"{delta:+.1f}%" if isinstance(delta, (int, float)) else None))
-
 def show_cover(cover_path: Path):
     if not cover_path.exists():
         st.warning("Cover image not found at reports/cover_bike.webp")
@@ -202,6 +197,23 @@ def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
         unsafe_allow_html=True,
     )
 
+def compute_core_kpis(df_f: pd.DataFrame, daily_f: pd.DataFrame):
+    """Return a dict of core KPIs used on the Intro page."""
+    total_rides = len(df_f) if "bike_rides_daily" not in df_f.columns else int(df_f["bike_rides_daily"].sum())
+    avg_day = float(daily_f["bike_rides_daily"].mean()) if daily_f is not None and not daily_f.empty else None
+    corr_tr = safe_corr(daily_f.set_index("date")["bike_rides_daily"], daily_f.set_index("date")["avg_temp_c"]) \
+              if daily_f is not None and "avg_temp_c" in daily_f.columns else None
+    peak_szn = df_f.groupby("season").size().sort_values(ascending=False).index[0] \
+               if "season" in df_f.columns and len(df_f) > 0 else None
+    wow = None; wk_last = None
+    if daily_f is not None and not daily_f.empty and "date" in daily_f.columns:
+        wk = daily_f.set_index("date")["bike_rides_daily"].resample("W").sum()
+        if len(wk) >= 1:
+            wk_last = wk.iloc[-1]
+        if len(wk) >= 2 and wk.iloc[-2] != 0:
+            wow = (wk.iloc[-1] - wk.iloc[-2]) / wk.iloc[-2] * 100
+    return dict(total_rides=total_rides, avg_day=avg_day, corr_tr=corr_tr, peak_szn=peak_szn, wk_last=wk_last, wow=wow)
+
 # ────────────────────────────── Sidebar / Data ─────────────────────────────
 st.sidebar.header("⚙️ Controls")
 
@@ -212,7 +224,7 @@ if not DATA_PATH.exists():
 
 df = load_data(DATA_PATH, DATA_PATH.stat().st_mtime)
 
-# Filters (built from available columns)
+# Filters
 date_min = pd.to_datetime(df["date"].min()) if "date" in df.columns else None
 date_max = pd.to_datetime(df["date"].max()) if "date" in df.columns else None
 date_range = None
@@ -252,7 +264,7 @@ page = st.sidebar.selectbox(
     ],
 )
 
-# One filtered frame to rule them all
+# Filtered data
 df_f = apply_filters(
     df,
     (pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])) if date_range else None,
@@ -261,48 +273,19 @@ df_f = apply_filters(
     temp_range,
 )
 
-# Daily table (post-filter) for many charts/KPIs
 daily_all = ensure_daily(df)
 daily_f   = ensure_daily(df_f)
-
-# ────────────────────────────── KPI Band (top of all pages) ───────────────
-with st.container():
-    c1, c2, c3, c4, c5 = st.columns(5)
-    total_rides = len(df_f) if "bike_rides_daily" not in df_f.columns else int(df_f["bike_rides_daily"].sum())
-    avg_day = float(daily_f["bike_rides_daily"].mean()) if daily_f is not None and not daily_f.empty else None
-    corr_tr = safe_corr(daily_f.set_index("date")["bike_rides_daily"], daily_f.set_index("date")["avg_temp_c"]) \
-              if daily_f is not None and "avg_temp_c" in daily_f.columns else None
-    peak_szn = df_f.groupby("season").size().sort_values(ascending=False).index[0] \
-               if "season" in df_f.columns and len(df_f) > 0 else None
-    wow = None; wk_last = None
-    if daily_f is not None and not daily_f.empty and "date" in daily_f.columns:
-        wk = daily_f.set_index("date")["bike_rides_daily"].resample("W").sum()
-        if len(wk) >= 1:
-            wk_last = wk.iloc[-1]
-        if len(wk) >= 2 and wk.iloc[-2] != 0:
-            wow = (wk.iloc[-1] - wk.iloc[-2]) / wk.iloc[-2] * 100
-
-    c1.metric("Total rides (filtered)", kfmt(total_rides))
-    c2.metric("Avg rides/day", kfmt(avg_day) if avg_day is not None else "—")
-    c3.metric("Temp ↔ rides corr", f"{corr_tr:+.2f}" if corr_tr is not None else "—")
-    c4.metric("Peak season", peak_szn if peak_szn else "—")
-    kpi(wk_last if wk_last is not None else None, "Weekly rides", wow)
-
-st.markdown("---")
 
 # ────────────────────────────── Pages ──────────────────────────────────────
 if page == "Intro":
     st.title("NYC Citi Bike — Strategy Dashboard")
     show_cover(cover_path)
 
-    # Global CSS for hero & KPI card styling (dark glass)
+    # CSS for hero & KPI card styling (dark glass)
     st.markdown("""
         <style>
-        /* Hero fade + rounded image */
         .element-container img { border-radius: 16px; animation: fadein 0.5s ease-in-out; }
         @keyframes fadein { from {opacity: 0;} to {opacity: 1;} }
-
-        /* KPI cards - dark glass look, responsive fonts, no overflow */
         .kpi-card {
             background: linear-gradient(180deg, rgba(22,27,34,0.75) 0%, rgba(18,22,28,0.85) 100%);
             border: 1px solid rgba(255,255,255,0.08);
@@ -316,30 +299,29 @@ if page == "Intro":
         }
         .kpi-title {
             font-size: .9rem; letter-spacing: .1px;
-            color: #cbd5e1; /* slate-300 */
+            color: #cbd5e1;
             margin-bottom: 4px;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
         .kpi-value {
             font-size: clamp(1.35rem, 2.2vw + .6rem, 2.1rem);
             font-weight: 800;
-            color: #f8fafc; /* slate-50 */
+            color: #f8fafc;
             line-height: 1.1;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
         .kpi-sub {
-            font-size: .85rem; color: #94a3b8; /* slate-400 */
+            font-size: .85rem; color: #94a3b8;
             margin-top: 4px;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
         </style>
     """, unsafe_allow_html=True)
 
-    # ===== HERO KPI CARDS ==================================================
-    total_trips = total_rides
-    daily_avg = avg_day
-    temp_corr = corr_tr
+    # Compute KPIs for Intro cards
+    KPIs = compute_core_kpis(df_f, daily_f)
 
+    # Weather Impact (% uplift good vs bad)
     weather_uplift_pct = None
     if daily_f is not None and not daily_f.empty:
         if "precip_bin" in daily_f.columns:
@@ -352,9 +334,9 @@ if page == "Intro":
             extreme = daily_f.loc[(daily_f["avg_temp_c"] < 5) | (daily_f["avg_temp_c"] > 30), "bike_rides_daily"].mean()
             if pd.notnull(comfy) and pd.notnull(extreme) and extreme not in (0, np.nan):
                 weather_uplift_pct = (comfy - extreme) / extreme * 100.0
-
     weather_str = f"{weather_uplift_pct:+.0f}%" if weather_uplift_pct is not None else "—"
 
+    # Peak Season text
     peak_value, peak_sub = "—", ""
     if "season" in df_f.columns and daily_f is not None and not daily_f.empty:
         tmp = daily_f.copy()
@@ -366,16 +348,17 @@ if page == "Intro":
             peak_value = f"{m.index[0]}"
             peak_sub   = f"{kfmt(m.iloc[0])} avg trips"
 
+    # Render KPI cards
     cA, cB, cC, cD, cE = st.columns(5)
-    with cA: kpi_card("Total Trips", kfmt(total_trips), "Across all stations", "🧮")
-    with cB: kpi_card("Daily Average", kfmt(daily_avg) if daily_avg is not None else "—", "Trips per day", "📅")
-    with cC: kpi_card("Temp Impact", f"{temp_corr:+.3f}" if temp_corr is not None else "—", "Correlation coeff.", "🌡️")
+    with cA: kpi_card("Total Trips", kfmt(KPIs["total_rides"]), "Across all stations", "🧮")
+    with cB: kpi_card("Daily Average", kfmt(KPIs["avg_day"]) if KPIs["avg_day"] is not None else "—", "Trips per day", "📅")
+    with cC: kpi_card("Temp Impact", f"{KPIs['corr_tr']:+.3f}" if KPIs["corr_tr"] is not None else "—", "Correlation coeff.", "🌡️")
     with cD: kpi_card("Weather Impact", weather_str, "Good vs bad weather", "🌦️")
     with cE: kpi_card("Peak Season", peak_value, peak_sub, "🏆")
 
     st.markdown("### What you’ll find here")
     c1, c2, c3, c4 = st.columns(4)
-    c1.info("**Advanced KPIs**\n\nTotals, Avg/day, Weekly delta, Temp↔Rides correlation.")
+    c1.info("**Advanced KPIs**\n\nTotals, Avg/day, Temp↔Rides correlation.")
     c2.info("**Weather Deep-Dive**\n\nScatter + fit, comfort index, precipitation bins.")
     c3.info("**Station Intelligence**\n\nTop stations, Pareto, OD flows (Sankey/Kepler).")
     c4.info("**Time Patterns**\n\nWeekday×Hour heatmap, seasonal/monthly swings.")
