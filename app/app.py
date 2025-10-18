@@ -190,12 +190,12 @@ def show_cover(cover_path: Path):
                  caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com")
 
 def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
-    """Pretty KPI box (HTML/CSS) for the Intro hero row."""
+    """Dark, glassy KPI card with responsive text that won't overflow."""
     st.markdown(
         f"""
         <div class="kpi-card">
             <div class="kpi-title">{icon} {title}</div>
-            <div class="kpi-value">{value}</div>
+            <div class="kpi-value" title="{value}">{value}</div>
             <div class="kpi-sub">{sub}</div>
         </div>
         """,
@@ -295,37 +295,51 @@ if page == "Intro":
     st.title("NYC Citi Bike — Strategy Dashboard")
     show_cover(cover_path)
 
-    # Global CSS for card styling + hero fade-in
+    # Global CSS for hero & KPI card styling (dark glass)
     st.markdown("""
         <style>
+        /* Hero fade + rounded image */
         .element-container img { border-radius: 16px; animation: fadein 0.5s ease-in-out; }
         @keyframes fadein { from {opacity: 0;} to {opacity: 1;} }
+
+        /* KPI cards - dark glass look, responsive fonts, no overflow */
         .kpi-card {
-            background: linear-gradient(180deg, rgba(247,249,252,1) 0%, rgba(243,246,250,1) 100%);
-            border: 1px solid #eef2f7;
+            background: linear-gradient(180deg, rgba(22,27,34,0.75) 0%, rgba(18,22,28,0.85) 100%);
+            border: 1px solid rgba(255,255,255,0.08);
             border-radius: 18px;
-            padding: 16px 18px;
-            box-shadow: 0 2px 8px rgba(16,24,40,0.06);
-            height: 140px;
+            padding: 14px 16px;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            min-height: 132px;
+            display: flex; flex-direction: column; justify-content: space-between;
         }
-        .kpi-title { font-size: 0.9rem; color: #475467; margin-bottom: 6px; }
-        .kpi-value { font-size: 2rem; font-weight: 700; color: #0f172a; line-height: 1.1; }
-        .kpi-sub { font-size: 0.85rem; color: #667085; margin-top: 6px; }
+        .kpi-title {
+            font-size: .9rem; letter-spacing: .1px;
+            color: #cbd5e1; /* slate-300 */
+            margin-bottom: 4px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .kpi-value {
+            font-size: clamp(1.35rem, 2.2vw + .6rem, 2.1rem);
+            font-weight: 800;
+            color: #f8fafc; /* slate-50 */
+            line-height: 1.1;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .kpi-sub {
+            font-size: .85rem; color: #94a3b8; /* slate-400 */
+            margin-top: 4px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
         </style>
     """, unsafe_allow_html=True)
 
-    # ===== HERO KPI CARDS (like your screenshot) ==================================
-    # Compute pieces safely
-    # 1) Total trips (filtered)
+    # ===== HERO KPI CARDS ==================================================
     total_trips = total_rides
-
-    # 2) Daily average (filtered daily)
     daily_avg = avg_day
-
-    # 3) Temp impact (corr)
     temp_corr = corr_tr
 
-    # 4) Weather impact (% uplift good vs bad)
     weather_uplift_pct = None
     if daily_f is not None and not daily_f.empty:
         if "precip_bin" in daily_f.columns:
@@ -334,31 +348,30 @@ if page == "Intro":
             if pd.notnull(good) and pd.notnull(bad) and bad not in (0, np.nan):
                 weather_uplift_pct = (good - bad) / bad * 100.0
         elif "avg_temp_c" in daily_f.columns:
-            # Fallback heuristic: comfy = 15–25°C; bad = <5°C or >30°C
             comfy = daily_f.loc[(daily_f["avg_temp_c"] >= 15) & (daily_f["avg_temp_c"] <= 25), "bike_rides_daily"].mean()
             extreme = daily_f.loc[(daily_f["avg_temp_c"] < 5) | (daily_f["avg_temp_c"] > 30), "bike_rides_daily"].mean()
             if pd.notnull(comfy) and pd.notnull(extreme) and extreme not in (0, np.nan):
                 weather_uplift_pct = (comfy - extreme) / extreme * 100.0
 
-    # 5) Peak season string with avg rides
-    peak_season_text = "—"
+    weather_str = f"{weather_uplift_pct:+.0f}%" if weather_uplift_pct is not None else "—"
+
+    peak_value, peak_sub = "—", ""
     if "season" in df_f.columns and daily_f is not None and not daily_f.empty:
         tmp = daily_f.copy()
         if "season" not in tmp.columns:
-            # map back season by merging daily season mode from original df
             s_map = df_f.groupby("date")["season"].agg(lambda s: s.mode().iloc[0] if len(s.mode()) else np.nan).reset_index()
             tmp = tmp.merge(s_map, on="date", how="left")
         m = tmp.groupby("season")["bike_rides_daily"].mean().sort_values(ascending=False)
         if len(m):
-            peak_season_text = f"{m.index[0]} ({kfmt(m.iloc[0])} avg trips)"
+            peak_value = f"{m.index[0]}"
+            peak_sub   = f"{kfmt(m.iloc[0])} avg trips"
 
-    # Render KPI cards in a row
     cA, cB, cC, cD, cE = st.columns(5)
     with cA: kpi_card("Total Trips", kfmt(total_trips), "Across all stations", "🧮")
     with cB: kpi_card("Daily Average", kfmt(daily_avg) if daily_avg is not None else "—", "Trips per day", "📅")
     with cC: kpi_card("Temp Impact", f"{temp_corr:+.3f}" if temp_corr is not None else "—", "Correlation coeff.", "🌡️")
-    with cD: kpi_card("Weather Impact", (f"{weather_uplift_pct:+.1f}%" if weather_uplift_pct is not None else "—"), "Good vs bad weather", "🌦️")
-    with cE: kpi_card("Peak Season", peak_season_text, "", "🏆")
+    with cD: kpi_card("Weather Impact", weather_str, "Good vs bad weather", "🌦️")
+    with cE: kpi_card("Peak Season", peak_value, peak_sub, "🏆")
 
     st.markdown("### What you’ll find here")
     c1, c2, c3, c4 = st.columns(4)
