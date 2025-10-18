@@ -219,8 +219,17 @@ st.markdown("---")
 # ────────────────────────────── Pages ──────────────────────────────────────
 if page == "Intro":
     st.title("NYC Citi Bike — Strategy Dashboard")
-    st.image(str(cover_path), use_container_width=True, caption="NYC Citi Bike — 2022 Season Snapshot")
-    st.markdown("### 🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com", output_format="auto")
+    show_cover()
+    st.image(str(cover_path), use_container_width=True, caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com")
+    st.markdown("""
+        <style>
+        .element-container img { 
+            border-radius: 16px;
+            animation: fadein 0.5s ease-in-out;
+        }
+        @keyframes fadein { from {opacity: 0;} to {opacity: 1;} }
+        </style>
+    """, unsafe_allow_html=True)
     st.caption("Purpose: pinpoint **where/when** inventory pressure emerges and what to do about it.")
     st.markdown(
         "- 🌤️ **Weather vs Usage** — seasonality & demand swings\n"
