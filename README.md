@@ -244,6 +244,17 @@ You can help improve:
 - Data from **Citi Bike NYC** and public weather sources  
 - _This project is not affiliated with Citi Bike._  
 
+```bash
+@dataset{citibike_2022,
+  title        = {Citi Bike NYC System Data (2022)},
+  author       = {Motivate International Inc.},
+  year         = {2022},
+  publisher    = {Citi Bike NYC},
+  howpublished = {\url{https://citibikenyc.com/system-data}},
+  note         = {Accessed: 2025-10-18}
+}
+```
+
 ---
 
 ## ❓ FAQ / Troubleshooting
