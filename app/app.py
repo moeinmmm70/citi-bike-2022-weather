@@ -19,6 +19,7 @@ MAP_HTMLS = [
     Path("reports/map/citibike_trip_flows_2022.html"),
     Path("reports/map/NYC_Bike_Trips_Aggregated.html"),
 ]
+cover_path = Path("reports/cover_bike.webp")
 
 RIDES_COLOR = "#1f77b4"   # readable blue
 TEMP_COLOR  = "#d62728"   # readable red
@@ -218,7 +219,6 @@ st.markdown("---")
 # ────────────────────────────── Pages ──────────────────────────────────────
 if page == "Intro":
     st.title("NYC Citi Bike — Strategy Dashboard")
-    cover_path = Path("reports/cover_bike.webp")
     if cover_path.exists():
        st.image(str(cover_path), use_container_width=True, caption="NYC Citi Bike — 2022 Season Snapshot")
     else:
