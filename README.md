@@ -45,8 +45,6 @@ It highlights seasonality, station concentration (Pareto), OD flows, diurnal pat
 
 ## 🖼️ Screenshots
 
-> Replace with your own images stored under `reports/screenshots/`.
-
 - **Intro & KPIs**  
   ![Intro](reports/screenshots/intro_kpis.png)
 
