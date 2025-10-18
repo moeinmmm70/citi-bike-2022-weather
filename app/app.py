@@ -183,6 +183,21 @@ def show_cover(cover_path: Path):
         st.image(str(cover_path), use_column_width=True,
                  caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com")
 
+def shorten_name(s: str, max_len: int = 22) -> str:
+    if not isinstance(s, str):
+        return str(s)
+    return s if len(s) <= max_len else s[: max_len - 1] + "…"
+
+def friendly_axis(fig, x=None, y=None, title=None, colorbar=None):
+    """Quickly set nice axis titles and optional figure title/colorbar label."""
+    if x: fig.update_xaxes(title_text=x)
+    if y: fig.update_yaxes(title_text=y)
+    if title: fig.update_layout(title=title)
+    if colorbar:
+        if hasattr(fig, "data"):
+            for tr in fig.data:
+                if hasattr(tr, "colorbar") and tr.colorbar:
+                    tr.colorbar.title = colorbar
 # ────────────────────────────── Sidebar / Data ─────────────────────────────
 st.sidebar.header("⚙️ Controls")
 
@@ -421,16 +436,33 @@ elif page == "Seasonal Patterns":
 
         # Seasonal comparison small-multiples (top stations per season if present)
         if {"start_station_name", "season"}.issubset(df_f.columns):
-            st.subheader("Top stations by season (rank flips highlight)")
-            g = (df_f.assign(n=1)
-                    .groupby(["season","start_station_name"])["n"].sum()
-                    .reset_index())
-            topN = st.slider("Top N per season", 5, 20, 10)
-            g = g.sort_values(["season","n"], ascending=[True,False]).groupby("season").head(topN)
-            figfac = px.bar(g, x="start_station_name", y="n", facet_col="season", facet_col_wrap=2,
-                            height=650, color="season")
-            figfac.update_xaxes(matches=None, showticklabels=False)
-            st.plotly_chart(figfac, use_container_width=True)
+    st.subheader("Top stations by season (rank flips highlight)")
+    g = (df_f.assign(n=1)
+            .groupby(["season","start_station_name"])["n"].sum()
+            .reset_index())
+    topN = st.slider("Top N per season", 5, 20, 10)
+    g = g.sort_values(["season","n"], ascending=[True,False]).groupby("season").head(topN)
+
+    # Show short labels on the x-axis but keep full names in hover
+    g["start_station_short"] = g["start_station_name"].astype(str).map(lambda s: shorten_name(s, 22))
+
+    figfac = px.bar(
+        g, x="start_station_short", y="n", facet_col="season", facet_col_wrap=2,
+        height=700, color="season",
+        labels={"start_station_short": "Station", "n": "Rides (count)", "season": "Season"},
+        hover_data={"start_station_short": False, "season": True, "n": ":,", "start_station_name": True}
+    )
+    # Better x ticks
+    figfac.update_xaxes(matches=None, showticklabels=True, tickangle=45, tickfont=dict(size=10))
+    # Cleaner y label
+    figfac.for_each_yaxis(lambda a: a.update(title_text="Rides (count)"))
+    figfac.update_layout(margin=dict(l=20, r=20, t=60, b=60), legend_title_text="")
+    # Consistent hover
+    figfac.update_traces(
+        hovertemplate="<b>%{customdata[0]}</b><br>Season: %{facet_col}<br>Rides: %{y:,}<extra></extra>"
+        if "customdata" in figfac.data[0] else None
+    )
+    st.plotly_chart(figfac, use_container_width=True)
 
 elif page == "Station Popularity":
     st.header("🚉 Most Popular Start Stations")
@@ -443,17 +475,23 @@ elif page == "Station Popularity":
                   .sort_values(ascending=False)
                   .head(topN)
                   .reset_index())
-        fig = go.Figure(go.Bar(x=s["start_station_name"], y=s["n"]))
-        fig.update_layout(
-            height=550,
-            title=f"Top {topN} start stations — rides count",
-            xaxis_title="Start Station", yaxis_title="Rides (count)",
-            margin=dict(l=20, r=20, t=60, b=120)
-        )
-        fig.update_xaxes(tickangle=45)
-        st.plotly_chart(fig, use_container_width=True)
+        s["label"] = s["start_station_name"].astype(str).map(lambda z: shorten_name(z, 28))
 
-        st.download_button("Download top stations (CSV)", s.to_csv(index=False).encode("utf-8"), "top_stations.csv", "text/csv")
+        fig = go.Figure(go.Bar(
+            x=s["label"], y=s["n"], text=s["n"], textposition="outside",
+            hovertext=s["start_station_name"], hovertemplate="<b>%{hovertext}</b><br>Rides: %{y:,}<extra></extra>"
+        ))
+        fig.update_layout(
+        height=600,
+        title=f"Top {topN} Start Stations — Rides",
+        xaxis_title="Station",
+        yaxis_title="Rides (count)",
+        margin=dict(l=20, r=20, t=60, b=100)
+        )
+        fig.update_xaxes(tickangle=45, tickfont=dict(size=10))
+        st.plotly_chart(fig, use_container_width=True)
+        st.download_button("Download top stations (CSV)", s[["start_station_name","n"]].rename(columns={"n":"rides"}).to_csv(index=False).encode("utf-8"), "top_stations.csv", "text/csv")
+
 
 elif page == "Pareto: Share of Rides":
     st.header("📈 Pareto Curve — Demand Concentration")
