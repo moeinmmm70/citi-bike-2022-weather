@@ -187,7 +187,7 @@ reports/map/citibike_trip_flows_2022.html
 
 # 6️⃣ Run the app
 streamlit run app/st_dashboard_Part_2.py
-
+```
 ## 📁 Repository Structure
 
 > 📂 Click through to explore folders/files in this repo.
