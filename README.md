@@ -268,6 +268,28 @@ GitHub Repository. https://github.com/moeinmmm70/citi-bike-2022-weather
 
 ---
 
+## 👥 Contributors & Contact
+
+### 👤 Project Lead  
+**Moein Mellat**  
+Data Scientist | Environmental Engineer | Streamlit Developer  
+
+🌐 **GitHub:** [github.com/moeinmmm70](https://github.com/moeinmmm70)  
+💼 **LinkedIn:** [linkedin.com/in/moeinmellat](https://www.linkedin.com/in/moeinmellat/)  
+📧 **Email:** [moein.mellat@gmail.com](mailto:moein.mellat@gmail.com)
+
+---
+
+### 🙏 Acknowledgments
+
+- **Citi Bike NYC** — for providing open-access, detailed trip datasets  
+- **Streamlit Community** — for creating an intuitive and elegant data app framework  
+- **Plotly & Pandas Developers** — for enabling interactive and efficient data visualization and analysis  
+- **Hlib Havryliuk** — author of *New York’s CitiBike Trips in 2025* dashboard, which inspired this project’s visual orientation  
+- **Open-Source Community** — for building the Python ecosystem that makes analytics accessible to everyone  
+
+---
+
 ### 🙌 Credits
 
 Built with ❤️ by **Moein Mellat**  
