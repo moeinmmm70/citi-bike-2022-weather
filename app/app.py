@@ -20,8 +20,8 @@ MAP_HTMLS = [
 ]
 cover_path = Path("reports/cover_bike.webp")
 
-RIDES_COLOR = "#1f77b4"   # readable blue
-TEMP_COLOR  = "#d62728"   # readable red
+RIDES_COLOR = "#1f77b4"
+TEMP_COLOR  = "#d62728"
 
 # ────────────────────────────── Helpers ───────────────────────────────────
 def kfmt(x):
@@ -185,7 +185,7 @@ def show_cover(cover_path: Path):
                  caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com")
 
 def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
-    """Dark, glassy KPI card with responsive text that won't overflow."""
+    """Larger dark, glassy KPI card (responsive, no overflow)."""
     st.markdown(
         f"""
         <div class="kpi-card">
@@ -197,22 +197,79 @@ def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
         unsafe_allow_html=True,
     )
 
+def render_hero_panel():
+    """Top gradient title panel like the screenshot."""
+    st.markdown(
+        """
+        <style>
+        /* Title Hero Panel */
+        .hero-panel {
+            background: radial-gradient(1200px 500px at 10% -10%, rgba(99,102,241,0.25) 0%, rgba(16,24,40,0.9) 40%),
+                        linear-gradient(180deg, rgba(18,22,28,0.95) 0%, rgba(18,22,28,0.85) 100%);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 22px;
+            padding: 28px 28px 26px 28px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.40);
+        }
+        .hero-title {
+            color: #f8fafc; /* slate-50 */
+            font-size: clamp(1.8rem, 2.2rem + 1.2vw, 3.1rem);
+            font-weight: 800;
+            letter-spacing: .2px;
+            margin: 0 0 8px 0;
+        }
+        .hero-sub {
+            color: #cbd5e1; /* slate-300 */
+            font-size: clamp(.95rem, .9rem + .3vw, 1.1rem);
+            margin: 0;
+        }
+        /* KPI cards (bigger) */
+        .kpi-card {
+            background: linear-gradient(180deg, rgba(25,31,40,0.80) 0%, rgba(16,21,29,0.86) 100%);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 22px;
+            padding: 18px 20px;
+            box-shadow: 0 10px 28px rgba(0,0,0,0.38);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            min-height: 168px; /* bigger */
+            display: flex; flex-direction: column; justify-content: space-between;
+        }
+        .kpi-title {
+            font-size: 1.0rem;
+            color: #cbd5e1;
+            margin-bottom: 6px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .kpi-value {
+            font-size: clamp(1.6rem, 2.4vw + .9rem, 2.6rem); /* bigger headline */
+            font-weight: 800;
+            color: #f8fafc;
+            line-height: 1.08;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .kpi-sub {
+            font-size: .95rem; color: #94a3b8;
+            margin-top: 6px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        /* Rounded images below hero */
+        .element-container img { border-radius: 16px; }
+        </style>
+        <div class="hero-panel">
+            <h1 class="hero-title">Ultimate CitiBike Analytics Dashboard</h1>
+            <p class="hero-sub">Advanced Data Science • Weather Correlation • Predictive Insights • Interactive Visualizations</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 def compute_core_kpis(df_f: pd.DataFrame, daily_f: pd.DataFrame):
-    """Return a dict of core KPIs used on the Intro page."""
     total_rides = len(df_f) if "bike_rides_daily" not in df_f.columns else int(df_f["bike_rides_daily"].sum())
     avg_day = float(daily_f["bike_rides_daily"].mean()) if daily_f is not None and not daily_f.empty else None
     corr_tr = safe_corr(daily_f.set_index("date")["bike_rides_daily"], daily_f.set_index("date")["avg_temp_c"]) \
               if daily_f is not None and "avg_temp_c" in daily_f.columns else None
-    peak_szn = df_f.groupby("season").size().sort_values(ascending=False).index[0] \
-               if "season" in df_f.columns and len(df_f) > 0 else None
-    wow = None; wk_last = None
-    if daily_f is not None and not daily_f.empty and "date" in daily_f.columns:
-        wk = daily_f.set_index("date")["bike_rides_daily"].resample("W").sum()
-        if len(wk) >= 1:
-            wk_last = wk.iloc[-1]
-        if len(wk) >= 2 and wk.iloc[-2] != 0:
-            wow = (wk.iloc[-1] - wk.iloc[-2]) / wk.iloc[-2] * 100
-    return dict(total_rides=total_rides, avg_day=avg_day, corr_tr=corr_tr, peak_szn=peak_szn, wk_last=wk_last, wow=wow)
+    return dict(total_rides=total_rides, avg_day=avg_day, corr_tr=corr_tr)
 
 # ────────────────────────────── Sidebar / Data ─────────────────────────────
 st.sidebar.header("⚙️ Controls")
@@ -278,47 +335,14 @@ daily_f   = ensure_daily(df_f)
 
 # ────────────────────────────── Pages ──────────────────────────────────────
 if page == "Intro":
-    st.title("NYC Citi Bike — Strategy Dashboard")
+    # HERO panel first (like screenshot)
+    render_hero_panel()
+
+    # Cover image under hero (keep or move below KPIs if you prefer)
     show_cover(cover_path)
+    st.caption("⚙️ Powered by NYC Citi Bike data • 365 days • Interactive visuals")
 
-    # CSS for hero & KPI card styling (dark glass)
-    st.markdown("""
-        <style>
-        .element-container img { border-radius: 16px; animation: fadein 0.5s ease-in-out; }
-        @keyframes fadein { from {opacity: 0;} to {opacity: 1;} }
-        .kpi-card {
-            background: linear-gradient(180deg, rgba(22,27,34,0.75) 0%, rgba(18,22,28,0.85) 100%);
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 18px;
-            padding: 14px 16px;
-            box-shadow: 0 6px 20px rgba(0,0,0,0.35);
-            backdrop-filter: blur(6px);
-            -webkit-backdrop-filter: blur(6px);
-            min-height: 132px;
-            display: flex; flex-direction: column; justify-content: space-between;
-        }
-        .kpi-title {
-            font-size: .9rem; letter-spacing: .1px;
-            color: #cbd5e1;
-            margin-bottom: 4px;
-            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        }
-        .kpi-value {
-            font-size: clamp(1.35rem, 2.2vw + .6rem, 2.1rem);
-            font-weight: 800;
-            color: #f8fafc;
-            line-height: 1.1;
-            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        }
-        .kpi-sub {
-            font-size: .85rem; color: #94a3b8;
-            margin-top: 4px;
-            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-
-    # Compute KPIs for Intro cards
+    # Compute KPIs for cards
     KPIs = compute_core_kpis(df_f, daily_f)
 
     # Weather Impact (% uplift good vs bad)
@@ -336,7 +360,7 @@ if page == "Intro":
                 weather_uplift_pct = (comfy - extreme) / extreme * 100.0
     weather_str = f"{weather_uplift_pct:+.0f}%" if weather_uplift_pct is not None else "—"
 
-    # Peak Season text
+    # Peak Season text (value + sub)
     peak_value, peak_sub = "—", ""
     if "season" in df_f.columns and daily_f is not None and not daily_f.empty:
         tmp = daily_f.copy()
@@ -348,7 +372,7 @@ if page == "Intro":
             peak_value = f"{m.index[0]}"
             peak_sub   = f"{kfmt(m.iloc[0])} avg trips"
 
-    # Render KPI cards
+    # KPI cards — bigger styling is in CSS above
     cA, cB, cC, cD, cE = st.columns(5)
     with cA: kpi_card("Total Trips", kfmt(KPIs["total_rides"]), "Across all stations", "🧮")
     with cB: kpi_card("Daily Average", kfmt(KPIs["avg_day"]) if KPIs["avg_day"] is not None else "—", "Trips per day", "📅")
