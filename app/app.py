@@ -135,7 +135,7 @@ def show_cover(cover_path: Path):
     except TypeError:
         # Older Streamlit fallback
         st.image(str(cover_path), use_column_width=True,
-                 caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com"
+                 caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com")
 # ────────────────────────────── Sidebar / Data ─────────────────────────────
 st.sidebar.header("⚙️ Controls")
 
