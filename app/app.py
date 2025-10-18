@@ -42,7 +42,6 @@ def shorten_name(s: str, max_len: int = 22) -> str:
     return s if len(s) <= max_len else s[: max_len - 1] + "…"
 
 def friendly_axis(fig, x=None, y=None, title=None, colorbar=None):
-    """Quickly set nice axis titles and optional figure title/colorbar label."""
     if x: fig.update_xaxes(title_text=x)
     if y: fig.update_yaxes(title_text=y)
     if title: fig.update_layout(title=title)
@@ -168,7 +167,6 @@ def apply_filters(df: pd.DataFrame,
     return out
 
 def linear_fit(x: pd.Series, y: pd.Series):
-    """Return slope, intercept for y ~ a*x + b and yhat func. Requires ≥2 points."""
     valid = (~x.isna()) & (~y.isna())
     x, y = x[valid], y[valid]
     if len(x) < 2:
@@ -181,7 +179,6 @@ def kpi(value, label, delta=None):
               delta=(f"{delta:+.1f}%" if isinstance(delta, (int, float)) else None))
 
 def show_cover(cover_path: Path):
-    """Render the hero image robustly across Streamlit versions."""
     if not cover_path.exists():
         st.warning("Cover image not found at reports/cover_bike.webp")
         return
@@ -191,6 +188,19 @@ def show_cover(cover_path: Path):
     except TypeError:
         st.image(str(cover_path), use_column_width=True,
                  caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com")
+
+def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
+    """Pretty KPI box (HTML/CSS) for the Intro hero row."""
+    st.markdown(
+        f"""
+        <div class="kpi-card">
+            <div class="kpi-title">{icon} {title}</div>
+            <div class="kpi-value">{value}</div>
+            <div class="kpi-sub">{sub}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 # ────────────────────────────── Sidebar / Data ─────────────────────────────
 st.sidebar.header("⚙️ Controls")
@@ -284,15 +294,71 @@ st.markdown("---")
 if page == "Intro":
     st.title("NYC Citi Bike — Strategy Dashboard")
     show_cover(cover_path)
+
+    # Global CSS for card styling + hero fade-in
     st.markdown("""
         <style>
-        .element-container img { 
-            border-radius: 16px;
-            animation: fadein 0.5s ease-in-out;
-        }
+        .element-container img { border-radius: 16px; animation: fadein 0.5s ease-in-out; }
         @keyframes fadein { from {opacity: 0;} to {opacity: 1;} }
+        .kpi-card {
+            background: linear-gradient(180deg, rgba(247,249,252,1) 0%, rgba(243,246,250,1) 100%);
+            border: 1px solid #eef2f7;
+            border-radius: 18px;
+            padding: 16px 18px;
+            box-shadow: 0 2px 8px rgba(16,24,40,0.06);
+            height: 140px;
+        }
+        .kpi-title { font-size: 0.9rem; color: #475467; margin-bottom: 6px; }
+        .kpi-value { font-size: 2rem; font-weight: 700; color: #0f172a; line-height: 1.1; }
+        .kpi-sub { font-size: 0.85rem; color: #667085; margin-top: 6px; }
         </style>
     """, unsafe_allow_html=True)
+
+    # ===== HERO KPI CARDS (like your screenshot) ==================================
+    # Compute pieces safely
+    # 1) Total trips (filtered)
+    total_trips = total_rides
+
+    # 2) Daily average (filtered daily)
+    daily_avg = avg_day
+
+    # 3) Temp impact (corr)
+    temp_corr = corr_tr
+
+    # 4) Weather impact (% uplift good vs bad)
+    weather_uplift_pct = None
+    if daily_f is not None and not daily_f.empty:
+        if "precip_bin" in daily_f.columns:
+            good = daily_f.loc[daily_f["precip_bin"] == "Low", "bike_rides_daily"].mean()
+            bad  = daily_f.loc[daily_f["precip_bin"] == "High", "bike_rides_daily"].mean()
+            if pd.notnull(good) and pd.notnull(bad) and bad not in (0, np.nan):
+                weather_uplift_pct = (good - bad) / bad * 100.0
+        elif "avg_temp_c" in daily_f.columns:
+            # Fallback heuristic: comfy = 15–25°C; bad = <5°C or >30°C
+            comfy = daily_f.loc[(daily_f["avg_temp_c"] >= 15) & (daily_f["avg_temp_c"] <= 25), "bike_rides_daily"].mean()
+            extreme = daily_f.loc[(daily_f["avg_temp_c"] < 5) | (daily_f["avg_temp_c"] > 30), "bike_rides_daily"].mean()
+            if pd.notnull(comfy) and pd.notnull(extreme) and extreme not in (0, np.nan):
+                weather_uplift_pct = (comfy - extreme) / extreme * 100.0
+
+    # 5) Peak season string with avg rides
+    peak_season_text = "—"
+    if "season" in df_f.columns and daily_f is not None and not daily_f.empty:
+        tmp = daily_f.copy()
+        if "season" not in tmp.columns:
+            # map back season by merging daily season mode from original df
+            s_map = df_f.groupby("date")["season"].agg(lambda s: s.mode().iloc[0] if len(s.mode()) else np.nan).reset_index()
+            tmp = tmp.merge(s_map, on="date", how="left")
+        m = tmp.groupby("season")["bike_rides_daily"].mean().sort_values(ascending=False)
+        if len(m):
+            peak_season_text = f"{m.index[0]} ({kfmt(m.iloc[0])} avg trips)"
+
+    # Render KPI cards in a row
+    cA, cB, cC, cD, cE = st.columns(5)
+    with cA: kpi_card("Total Trips", kfmt(total_trips), "Across all stations", "🧮")
+    with cB: kpi_card("Daily Average", kfmt(daily_avg) if daily_avg is not None else "—", "Trips per day", "📅")
+    with cC: kpi_card("Temp Impact", f"{temp_corr:+.3f}" if temp_corr is not None else "—", "Correlation coeff.", "🌡️")
+    with cD: kpi_card("Weather Impact", (f"{weather_uplift_pct:+.1f}%" if weather_uplift_pct is not None else "—"), "Good vs bad weather", "🌦️")
+    with cE: kpi_card("Peak Season", peak_season_text, "", "🏆")
 
     st.markdown("### What you’ll find here")
     c1, c2, c3, c4 = st.columns(4)
@@ -415,7 +481,6 @@ elif page == "Seasonal Patterns":
         friendly_axis(figm, x="", y="Rides per month", title="Monthly rides with 3-month trend")
         st.plotly_chart(figm, use_container_width=True)
 
-        # Seasonal comparison small-multiples (top stations per season if present)
         if {"start_station_name", "season"}.issubset(df_f.columns):
             st.subheader("Top stations by season (rank flips highlight)")
             g = (df_f.assign(n=1)
