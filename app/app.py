@@ -219,10 +219,7 @@ st.markdown("---")
 # ────────────────────────────── Pages ──────────────────────────────────────
 if page == "Intro":
     st.title("NYC Citi Bike — Strategy Dashboard")
-    if cover_path.exists():
-       st.image(str(cover_path), use_container_width=True, caption="NYC Citi Bike — 2022 Season Snapshot")
-    else:
-       st.warning("Cover image not found at reports/cover_bike.webp")
+    st.image(str(cover_path), use_container_width=True, caption="NYC Citi Bike — 2022 Season Snapshot")
     st.caption("Purpose: pinpoint **where/when** inventory pressure emerges and what to do about it.")
     st.markdown(
         "- 🌤️ **Weather vs Usage** — seasonality & demand swings\n"
