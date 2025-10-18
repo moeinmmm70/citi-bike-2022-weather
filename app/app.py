@@ -184,8 +184,9 @@ def show_cover(cover_path: Path):
         st.image(str(cover_path), use_column_width=True,
                  caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com")
 
+# ── UI helpers (Intro hero + KPI cards)
 def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
-    """Larger dark, glassy KPI card (responsive, no overflow)."""
+    """Bigger card height, slightly smaller fonts so the text fits."""
     st.markdown(
         f"""
         <div class="kpi-card">
@@ -198,67 +199,70 @@ def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
     )
 
 def render_hero_panel():
-    """Top gradient title panel like the screenshot."""
+    """Centered hero title panel with smaller text (original title)."""
     st.markdown(
         """
         <style>
-        /* Title Hero Panel */
+        /* Hero Panel */
         .hero-panel {
-            background: radial-gradient(1200px 500px at 10% -10%, rgba(99,102,241,0.25) 0%, rgba(16,24,40,0.9) 40%),
-                        linear-gradient(180deg, rgba(18,22,28,0.95) 0%, rgba(18,22,28,0.85) 100%);
+            background: linear-gradient(180deg, rgba(18,22,28,0.95) 0%, rgba(18,22,28,0.86) 100%);
             border: 1px solid rgba(255,255,255,0.08);
             border-radius: 22px;
-            padding: 28px 28px 26px 28px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.40);
+            padding: 22px 24px;
+            box-shadow: 0 10px 26px rgba(0,0,0,0.38);
+            text-align: center;
         }
         .hero-title {
-            color: #f8fafc; /* slate-50 */
-            font-size: clamp(1.8rem, 2.2rem + 1.2vw, 3.1rem);
+            color: #f8fafc;
+            font-size: clamp(1.4rem, 1.2rem + 1.6vw, 2.3rem); /* smaller than before */
             font-weight: 800;
             letter-spacing: .2px;
-            margin: 0 0 8px 0;
+            margin: 2px 0 6px 0;
         }
         .hero-sub {
-            color: #cbd5e1; /* slate-300 */
-            font-size: clamp(.95rem, .9rem + .3vw, 1.1rem);
+            color: #cbd5e1;
+            font-size: clamp(.85rem, .8rem + .3vw, 1.0rem);  /* smaller subtitle */
             margin: 0;
         }
-        /* KPI cards (bigger) */
+
+        /* KPI cards — physically bigger but fonts restrained so content fits */
         .kpi-card {
             background: linear-gradient(180deg, rgba(25,31,40,0.80) 0%, rgba(16,21,29,0.86) 100%);
             border: 1px solid rgba(255,255,255,0.08);
             border-radius: 22px;
-            padding: 18px 20px;
-            box-shadow: 0 10px 28px rgba(0,0,0,0.38);
+            padding: 16px 18px;
+            box-shadow: 0 10px 26px rgba(0,0,0,0.36);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
-            min-height: 168px; /* bigger */
+            min-height: 190px;                /* taller cards */
             display: flex; flex-direction: column; justify-content: space-between;
         }
         .kpi-title {
-            font-size: 1.0rem;
+            font-size: .95rem;                 /* slightly smaller */
             color: #cbd5e1;
-            margin-bottom: 6px;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            margin-bottom: 6px;
         }
         .kpi-value {
-            font-size: clamp(1.6rem, 2.4vw + .9rem, 2.6rem); /* bigger headline */
+            font-size: clamp(1.25rem, 1.0rem + 1.2vw, 2.0rem);  /* smaller to avoid overflow */
             font-weight: 800;
             color: #f8fafc;
             line-height: 1.08;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
         .kpi-sub {
-            font-size: .95rem; color: #94a3b8;
+            font-size: .90rem;                 /* slightly smaller */
+            color: #94a3b8;
             margin-top: 6px;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
-        /* Rounded images below hero */
+
+        /* Rounded cover image below hero */
         .element-container img { border-radius: 16px; }
         </style>
         <div class="hero-panel">
-            <h1 class="hero-title">Ultimate CitiBike Analytics Dashboard</h1>
-            <p class="hero-sub">Advanced Data Science • Weather Correlation • Predictive Insights • Interactive Visualizations</p>
+            <h1 class="hero-title">NYC Citi Bike — Strategy Dashboard</h1>
+            <p class="hero-sub">Seasonality • Weather–demand correlation • Station intelligence • Time patterns</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -335,10 +339,10 @@ daily_f   = ensure_daily(df_f)
 
 # ────────────────────────────── Pages ──────────────────────────────────────
 if page == "Intro":
-    # HERO panel first (like screenshot)
+    # Centered hero panel (original title), smaller text
     render_hero_panel()
 
-    # Cover image under hero (keep or move below KPIs if you prefer)
+    # Cover image under hero
     show_cover(cover_path)
     st.caption("⚙️ Powered by NYC Citi Bike data • 365 days • Interactive visuals")
 
@@ -360,7 +364,7 @@ if page == "Intro":
                 weather_uplift_pct = (comfy - extreme) / extreme * 100.0
     weather_str = f"{weather_uplift_pct:+.0f}%" if weather_uplift_pct is not None else "—"
 
-    # Peak Season text (value + sub)
+    # Peak Season text
     peak_value, peak_sub = "—", ""
     if "season" in df_f.columns and daily_f is not None and not daily_f.empty:
         tmp = daily_f.copy()
@@ -372,7 +376,7 @@ if page == "Intro":
             peak_value = f"{m.index[0]}"
             peak_sub   = f"{kfmt(m.iloc[0])} avg trips"
 
-    # KPI cards — bigger styling is in CSS above
+    # KPI cards — bigger container, smaller fonts = clean fit
     cA, cB, cC, cD, cE = st.columns(5)
     with cA: kpi_card("Total Trips", kfmt(KPIs["total_rides"]), "Across all stations", "🧮")
     with cB: kpi_card("Daily Average", kfmt(KPIs["avg_day"]) if KPIs["avg_day"] is not None else "—", "Trips per day", "📅")
