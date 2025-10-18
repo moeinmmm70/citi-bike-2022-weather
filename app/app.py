@@ -219,7 +219,6 @@ st.markdown("---")
 # ────────────────────────────── Pages ──────────────────────────────────────
 if page == "Intro":
     st.title("NYC Citi Bike — Strategy Dashboard")
-    show_cover()
     st.image(str(cover_path), use_container_width=True, caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com")
     st.markdown("""
         <style>
