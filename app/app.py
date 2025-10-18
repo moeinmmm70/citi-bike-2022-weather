@@ -47,15 +47,18 @@ def safe_corr(a: pd.Series, b: pd.Series) -> float | None:
 @st.cache_data
 def load_data(path: Path, _sig: float | None = None) -> pd.DataFrame:
     df = pd.read_csv(path, low_memory=False)
+
     # Normalize/parse timestamps → date
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
     elif "started_at" in df.columns:
         df["date"] = pd.to_datetime(df["started_at"], errors="coerce").dt.floor("D")
+
     # Station names to category (performance)
     for col in ["start_station_name", "end_station_name", "member_casual", "usertype"]:
         if col in df.columns:
             df[col] = df[col].astype("category")
+
     # Season if missing
     if "season" not in df.columns and "date" in df.columns:
         def season_from_month(m):
@@ -64,10 +67,43 @@ def load_data(path: Path, _sig: float | None = None) -> pd.DataFrame:
             if m in (6, 7, 8):   return "Summer"
             return "Autumn"
         df["season"] = df["date"].dt.month.map(season_from_month).astype("category")
+
+    # Derive precip bins if precip exists
+    for pcol in ["precip_mm", "precipitation_mm", "precip_mm_day", "precipitation"]:
+        if pcol in df.columns:
+            q = df[pcol].quantile([0.33, 0.66]).values if df[pcol].notna().sum() > 10 else [0.2, 2.0]
+            labels = ["Low", "Medium", "High"]
+            df["precip_bin"] = pd.cut(df[pcol], bins=[-1e9, q[0], q[1], 1e9], labels=labels, include_lowest=True)
+            df["precip_bin"] = df["precip_bin"].astype("category")
+            break
+
+    # Derive a very light Comfort Index if feasible (higher = nicer)
+    # Uses temp and wind if present; optional humidity boosts it slightly if available.
+    temp_candidates = ["avg_temp_c", "avgTemp", "avg_temp", "temperature_c"]
+    wind_candidates = ["wind_kph", "wind_speed_kph", "wind_mps"]
+    hum_candidates  = ["humidity", "rel_humidity"]
+
+    tcol = next((c for c in temp_candidates if c in df.columns), None)
+    wcol = next((c for c in wind_candidates if c in df.columns), None)
+    hcol = next((c for c in hum_candidates  if c in df.columns), None)
+
+    if tcol is not None and wcol is not None:
+        # Simple linearized comfort: warm (to ~22°C) good, wind reduces; humidity mild bonus
+        t = df[tcol].astype(float)
+        w = df[wcol].astype(float)
+        base = 1.0 - (np.abs(t - 22.0) / 30.0) - (w / (w.replace(0, np.nan).quantile(0.95) or 1.0)) * 0.3
+        base = base.clip(-1.0, 1.0)
+        if hcol is not None:
+            h = (df[hcol].astype(float) / 100.0).clip(0, 1)
+            base = base + 0.1 * (1 - np.abs(h - 0.5) * 2)  # mid humidity slightly nicer
+        df["comfort_index"] = base.astype(float)
+
     return df
 
 def ensure_daily(df: pd.DataFrame) -> pd.DataFrame | None:
-    """Guarantee a daily table with columns: date, bike_rides_daily, optional avg_temp_c."""
+    """Guarantee a daily table with columns: date, bike_rides_daily, optional avg_temp_c/precip/comfort."""
+    if df is None or df.empty:
+        return None
     if {"date", "bike_rides_daily"}.issubset(df.columns):
         daily = df[["date", "bike_rides_daily"]].dropna().drop_duplicates()
     elif "date" in df.columns:
@@ -76,14 +112,26 @@ def ensure_daily(df: pd.DataFrame) -> pd.DataFrame | None:
     else:
         return None
 
-    # Attach a temperature column if any reasonable candidate exists
-    for cand in ["avg_temp_c", "avgTemp", "avg_temp", "temperature_c"]:
+    # Attach daily means for available weather columns
+    attach_cols = []
+    for cand in ["avg_temp_c", "avgTemp", "avg_temp", "temperature_c", "precip_bin",
+                 "precip_mm", "precipitation_mm", "wind_kph", "wind_speed_kph", "comfort_index"]:
         if cand in df.columns:
-            temp = (df.groupby("date", as_index=False)[cand]
-                      .mean()
-                      .rename(columns={cand: "avg_temp_c"}))
-            daily = daily.merge(temp, on="date", how="left")
-            break
+            attach_cols.append(cand)
+    if attach_cols:
+        agg = {}
+        for c in attach_cols:
+            if c == "precip_bin":
+                agg[c] = lambda s: s.mode().iloc[0] if len(s.mode()) else np.nan
+            else:
+                agg[c] = "mean"
+        extra = df.groupby("date", as_index=False).agg(agg)
+        # Normalize temp key
+        for talt in ["avgTemp", "avg_temp", "temperature_c"]:
+            if talt in extra.columns and "avg_temp_c" not in extra.columns:
+                extra = extra.rename(columns={talt: "avg_temp_c"})
+        daily = daily.merge(extra, on="date", how="left")
+
     return daily.sort_values("date")
 
 def apply_filters(df: pd.DataFrame,
@@ -129,13 +177,12 @@ def show_cover(cover_path: Path):
         st.warning("Cover image not found at reports/cover_bike.webp")
         return
     try:
-        # Newer Streamlit
         st.image(str(cover_path), use_container_width=True,
                  caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com")
     except TypeError:
-        # Older Streamlit fallback
         st.image(str(cover_path), use_column_width=True,
                  caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com")
+
 # ────────────────────────────── Sidebar / Data ─────────────────────────────
 st.sidebar.header("⚙️ Controls")
 
@@ -175,6 +222,8 @@ page = st.sidebar.selectbox(
     [
         "Intro",
         "Weather vs Bike Usage",
+        "Correlation & Distributions",
+        "Seasonal Patterns",
         "Station Popularity",
         "Pareto: Share of Rides",
         "Trip Flows Map",
@@ -216,8 +265,11 @@ with st.container():
         peak_szn = df_f.groupby("season").size().sort_values(ascending=False).index[0]
     # WoW delta (weekly total)
     wow = None
-    if daily_f is not None and not daily_f.empty:
+    wk_last = None
+    if daily_f is not None and not daily_f.empty and "date" in daily_f.columns:
         wk = daily_f.set_index("date")["bike_rides_daily"].resample("W").sum()
+        if len(wk) >= 1:
+            wk_last = wk.iloc[-1]
         if len(wk) >= 2 and wk.iloc[-2] != 0:
             wow = (wk.iloc[-1] - wk.iloc[-2]) / wk.iloc[-2] * 100
 
@@ -225,7 +277,7 @@ with st.container():
     c2.metric("Avg rides/day", kfmt(avg_day) if avg_day is not None else "—")
     c3.metric("Temp ↔ rides corr", f"{corr_tr:+.2f}" if corr_tr is not None else "—")
     c4.metric("Peak season", peak_szn if peak_szn else "—")
-    kpi(wk.iloc[-1] if daily_f is not None and len(daily_f) else None, "Weekly rides", wow)
+    kpi(wk_last if wk_last is not None else None, "Weekly rides", wow)
 
 st.markdown("---")
 
@@ -242,16 +294,16 @@ if page == "Intro":
         @keyframes fadein { from {opacity: 0;} to {opacity: 1;} }
         </style>
     """, unsafe_allow_html=True)
-    st.caption("Purpose: pinpoint **where/when** inventory pressure emerges and what to do about it.")
-    st.markdown(
-        "- 🌤️ **Weather vs Usage** — seasonality & demand swings\n"
-        "- 🚉 **Station Popularity** — hotspots to prioritize\n"
-        "- 📈 **Pareto** — concentration of demand\n"
-        "- 🗺️ **Trip Flows** — likely rebalancing corridors\n"
-        "- ⏰ **Weekday × Hour** — temporal load patterns\n"
-        "- 🧪 **What-if** — quick temperature sensitivity"
-    )
-    st.info("Use the sidebar filters; all charts follow your selections.")
+
+    # Feature cards (orientation like the README screenshot)
+    st.markdown("### What you’ll find here")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.info("**Advanced KPIs**\n\nTotals, Avg/day, Weekly delta, Temp↔Rides correlation.")
+    c2.info("**Weather Deep-Dive**\n\nScatter + fit, comfort index, precipitation bins.")
+    c3.info("**Station Intelligence**\n\nTop stations, Pareto, OD flows (Sankey/Kepler).")
+    c4.info("**Time Patterns**\n\nWeekday×Hour heatmap, seasonal/monthly swings.")
+
+    st.caption("Use the sidebar filters; every view updates live.")
 
 elif page == "Weather vs Bike Usage":
     st.header("🌤️ Daily Bike Rides vs Temperature")
@@ -278,26 +330,107 @@ elif page == "Weather vs Bike Usage":
             )
             fig.update_yaxes(title_text="Temperature (°C)", secondary_y=True)
 
+        # Optional comfort overlay
+        if "comfort_index" in daily_f.columns and daily_f["comfort_index"].notna().any():
+            # Normalize to 0..1 and render as lightly filled area on right axis
+            ci = (daily_f["comfort_index"] - daily_f["comfort_index"].min()) / (daily_f["comfort_index"].max() - daily_f["comfort_index"].min() + 1e-9)
+            fig.add_trace(go.Scatter(x=daily_f["date"], y=ci,
+                                     mode="lines", name="Comfort index (0–1)",
+                                     line=dict(width=1, dash="dash"), opacity=0.5),
+                          secondary_y=True)
+
         fig.update_layout(title="Daily Bike Rides vs Temperature — NYC (2022)", hovermode="x unified", height=520)
         fig.update_xaxes(rangeslider_visible=True)
         fig.update_yaxes(title_text="Bike Rides (count)", secondary_y=False)
         st.plotly_chart(fig, use_container_width=True)
 
-        # Scatter + simple OLS fit (no heavy deps)
+        # Scatter + simple OLS fit
         if "avg_temp_c" in daily_f.columns and daily_f["avg_temp_c"].notna().any():
             st.subheader("Temperature sensitivity (scatter)")
-            x = daily_f["avg_temp_c"]
-            y = daily_f["bike_rides_daily"]
+            x = daily_f["avg_temp_c"]; y = daily_f["bike_rides_daily"]
             a, b, yhat = linear_fit(x, y)
-            fig2 = go.Figure()
-            fig2.add_trace(go.Scatter(x=x, y=y, mode="markers", name="Days"))
+            color = daily_f["precip_bin"] if "precip_bin" in daily_f.columns else None
+            fig2 = px.scatter(daily_f, x="avg_temp_c", y="bike_rides_daily", color=("precip_bin" if color is not None else None),
+                              labels=dict(avg_temp_c="Avg Temp (°C)", bike_rides_daily="Bike Rides"))
             if a is not None:
                 xs = np.linspace(float(np.nanmin(x)), float(np.nanmax(x)), 100)
                 fig2.add_trace(go.Scatter(x=xs, y=yhat(xs), mode="lines", name=f"Fit: rides ≈ {a:.1f}·temp + {b:.0f}"))
-            fig2.update_layout(height=480, xaxis_title="Avg Temp (°C)", yaxis_title="Bike Rides")
+            fig2.update_layout(height=480)
             st.plotly_chart(fig2, use_container_width=True)
 
         st.markdown("**So what?** Warm days lift demand; shoulder seasons show the steepest slope. Staff rebalancing accordingly.")
+
+elif page == "Correlation & Distributions":
+    st.header("📊 Correlation matrix & distributions")
+    if daily_f is None or daily_f.empty:
+        st.info("Need daily aggregates.")
+    else:
+        # Build correlation-ready table
+        cand_cols = []
+        for c in ["bike_rides_daily", "avg_temp_c", "precip_mm", "precipitation_mm",
+                  "wind_kph", "wind_speed_kph", "comfort_index"]:
+            if c in daily_f.columns:
+                cand_cols.append(c)
+        if len(cand_cols) >= 2:
+            corr_df = daily_f[cand_cols].astype(float)
+            corr = corr_df.corr()
+            fig = px.imshow(corr, text_auto=True, aspect="auto", origin="lower",
+                            color_continuous_scale="RdBu_r", zmin=-1, zmax=1,
+                            labels=dict(color="corr"))
+            fig.update_layout(height=520, title="Correlation matrix (daily)")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Not enough numeric weather columns to compute a correlation matrix.")
+
+        # Box/violin distributions by season
+        if "season" in daily_f.columns:
+            st.subheader("Distribution of rides by season")
+            figb = px.violin(daily_f, x="season", y="bike_rides_daily", box=True, points=False)
+            figb.update_layout(height=520, xaxis_title="", yaxis_title="Bike Rides / day")
+            st.plotly_chart(figb, use_container_width=True)
+
+        # Optional: rides by precip bin
+        if "precip_bin" in daily_f.columns:
+            st.subheader("Effect of precipitation")
+            figp = px.box(daily_f, x="precip_bin", y="bike_rides_daily")
+            figp.update_layout(height=420, xaxis_title="Precipitation bin", yaxis_title="Bike Rides / day")
+            st.plotly_chart(figp, use_container_width=True)
+
+elif page == "Seasonal Patterns":
+    st.header("🗓️ Monthly & seasonal patterns")
+    # Monthly aggregation from filtered data
+    if "date" not in df_f.columns:
+        st.info("Need dates to compute monthly patterns.")
+    else:
+        d = df_f.copy()
+        d["month"] = d["date"].dt.to_period("M").dt.to_timestamp()
+        if "bike_rides_daily" in d.columns:
+            monthly = d.groupby("month", as_index=False)["bike_rides_daily"].sum()
+        else:
+            # Trip-level sample → count rows as rides
+            monthly = d.groupby("month", as_index=False).size().rename(columns={"size": "bike_rides_daily"})
+        # 3-month rolling mean
+        monthly["ma3"] = monthly["bike_rides_daily"].rolling(3, center=True).mean()
+
+        figm = go.Figure()
+        figm.add_trace(go.Bar(x=monthly["month"], y=monthly["bike_rides_daily"], name="Monthly rides"))
+        figm.add_trace(go.Scatter(x=monthly["month"], y=monthly["ma3"], mode="lines+markers", name="3-mo trend"))
+        figm.update_layout(height=520, title="Monthly rides with 3-month trend",
+                           xaxis_title="", yaxis_title="Rides / month")
+        st.plotly_chart(figm, use_container_width=True)
+
+        # Seasonal comparison small-multiples (top stations per season if present)
+        if {"start_station_name", "season"}.issubset(df_f.columns):
+            st.subheader("Top stations by season (rank flips highlight)")
+            g = (df_f.assign(n=1)
+                    .groupby(["season","start_station_name"])["n"].sum()
+                    .reset_index())
+            topN = st.slider("Top N per season", 5, 20, 10)
+            g = g.sort_values(["season","n"], ascending=[True,False]).groupby("season").head(topN)
+            figfac = px.bar(g, x="start_station_name", y="n", facet_col="season", facet_col_wrap=2,
+                            height=650, color="season")
+            figfac.update_xaxes(matches=None, showticklabels=False)
+            st.plotly_chart(figfac, use_container_width=True)
 
 elif page == "Station Popularity":
     st.header("🚉 Most Popular Start Stations")
@@ -335,9 +468,7 @@ elif page == "Pareto: Share of Rides":
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=cum["rank"], y=cum["n"], mode="lines", name="Cumulative share"))
-        # 80% line
         fig.add_hline(y=0.80, line_dash="dot")
-        # rank at 80%
         idx80 = int(np.searchsorted(cum["n"].values, 0.8))
         if 0 < idx80 < len(cum):
             fig.add_vline(x=cum.loc[idx80, "rank"], line_dash="dot")
@@ -391,7 +522,6 @@ elif page == "Weekday × Hour Heatmap":
         dt = pd.to_datetime(df_f["started_at"], errors="coerce")
         dfx = pd.DataFrame({"weekday": dt.dt.weekday, "hour": dt.dt.hour})
         grid = (dfx.groupby(["weekday", "hour"]).size().rename("rides").reset_index())
-        # Pivot to a 7×24 grid
         mat = grid.pivot(index="weekday", columns="hour", values="rides").reindex(index=range(0,7), columns=range(0,24)).fillna(0)
         fig = px.imshow(mat, aspect="auto", origin="lower",
                         labels=dict(color="Rides"),
@@ -406,8 +536,7 @@ elif page == "What-if: Temp → Rides":
         st.info("Requires a daily table with `avg_temp_c`.")
     else:
         # Fit on ALL daily data to keep model stable; apply current filters for context
-        x = daily_all["avg_temp_c"]
-        y = daily_all["bike_rides_daily"]
+        x = daily_all["avg_temp_c"]; y = daily_all["bike_rides_daily"]
         a, b, yhat = linear_fit(x, y)
         tmin, tmax = float(np.nanmin(x)), float(np.nanmax(x))
         t = st.slider("Forecast average temperature (°C)", tmin, tmax, float(np.nanmedian(x)), 0.5)
