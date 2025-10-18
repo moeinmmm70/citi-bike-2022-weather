@@ -123,6 +123,19 @@ def kpi(value, label, delta=None):
     st.metric(label=label, value=kfmt(value) if pd.notnull(value) else "—",
               delta=(f"{delta:+.1f}%" if isinstance(delta, (int, float)) else None))
 
+def show_cover(cover_path: Path):
+    """Render the hero image robustly across Streamlit versions."""
+    if not cover_path.exists():
+        st.warning("Cover image not found at reports/cover_bike.webp")
+        return
+    try:
+        # Newer Streamlit
+        st.image(str(cover_path), use_container_width=True,
+                 caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com")
+    except TypeError:
+        # Older Streamlit fallback
+        st.image(str(cover_path), use_column_width=True,
+                 caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com"
 # ────────────────────────────── Sidebar / Data ─────────────────────────────
 st.sidebar.header("⚙️ Controls")
 
@@ -219,6 +232,7 @@ st.markdown("---")
 # ────────────────────────────── Pages ──────────────────────────────────────
 if page == "Intro":
     st.title("NYC Citi Bike — Strategy Dashboard")
+    show_cover()
     st.image(str(cover_path), use_container_width=True, caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com")
     st.markdown("""
         <style>
