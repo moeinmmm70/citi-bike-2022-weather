@@ -220,6 +220,7 @@ st.markdown("---")
 if page == "Intro":
     st.title("NYC Citi Bike — Strategy Dashboard")
     st.image(str(cover_path), use_container_width=True, caption="NYC Citi Bike — 2022 Season Snapshot")
+    st.markdown("### 🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com", output_format="auto")
     st.caption("Purpose: pinpoint **where/when** inventory pressure emerges and what to do about it.")
     st.markdown(
         "- 🌤️ **Weather vs Usage** — seasonality & demand swings\n"
