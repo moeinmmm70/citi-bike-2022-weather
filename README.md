@@ -1,32 +1,284 @@
-# NYC Citi Bike 2022 — Weather & Demand Dashboard 🚲
+# 🚲 NYC Citi Bike — 2022 Weather & Usage Analytics
 
-**Goal:** understand **where/when** Citi Bike NYC faces **inventory stress** and turn it into **actionable ops recommendations**.  
-**Deliverable:** an interactive, multi-page **Streamlit** dashboard plus the **notebooks** and **data prep** used to build it.
+[![Streamlit App](https://img.shields.io/badge/Live%20App-Streamlit-brightgreen?logo=streamlit)](https://citi-bike-2022-weather-yewjc77stq3kroa9s8ffrm.streamlit.app/)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg?logo=python)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.x-FF4B4B.svg?logo=streamlit&logoColor=white)
+![Plotly](https://img.shields.io/badge/Plotly-graphing-3D77B6.svg)
+![Status](https://img.shields.io/badge/Status-Active-success.svg)
 
-**Live app:** https://citi-bike-2022-weather-ciup73f7hxc9iub5xacdch.streamlit.app/  
-**Repository:** https://github.com/moeinmmm70/citi-bike-2022-weather
+**Interactive, decision-oriented dashboard** that explores how **weather** shapes **Citi Bike demand** across New York City in **2022**.  
+It highlights seasonality, station concentration (Pareto), OD flows, diurnal patterns, and includes a **What-If** tool to estimate rides at a given temperature.
+
+> 🔴 **Live app:** [citi-bike-2022-weather.streamlit.app](https://citi-bike-2022-weather-yewjc77stq3kroa9s8ffrm.streamlit.app/)
+
+---
+
+## 🧭 Table of Contents
+- [✨ Highlights](#-highlights)
+- [🖼️ Screenshots](#️-screenshots)
+- [⚙️ How it Works](#️-how-it-works)
+- [🌦️ Data](#️-data)
+- [📊 Features by Page](#-features-by-page)
+- [📈 KPIs](#-kpis)
+- [🧰 Tech Stack](#-tech-stack)
+- [💻 Local Setup](#-local-setup)
+- [📁 Repository Structure](#-repository-structure)
+- [⚡ Performance Notes](#-performance-notes)
+- [🗺️ Roadmap](#️-roadmap)
+- [🤝 Contributing](#-contributing)
+- [📜 License & Attribution](#-license--attribution)
+- [❓ FAQ / Troubleshooting](#-faq--troubleshooting)
 
 ---
 
-## 📦 What’s Inside
+## ✨ Highlights
 
-- **Data & Notebooks**: scripts/notebooks to clean, merge, and reduce data for deployment.  
-- **Streamlit App**: multi-page dashboard with seasonality, station popularity, trip-flow map, and time-of-day heatmap.  
-- **Deployment**: configuration to run on Streamlit Community Cloud using a **≤ 25 MB** sample.
+- 🌡️ **Weather ↔ Usage correlation** with dual-axis time series & scatter + linear fit  
+- 🧊 **Comfort Index** + **precipitation bins** to visualize weather impacts  
+- 🚉 **Station Intelligence**: Top stations, Pareto concentration, Sankey OD flows, Kepler.gl map  
+- 📆 **Temporal Patterns**: Weekday × hour heatmap, monthly trend with moving average  
+- 🧮 **What-If Simulator**: predict expected rides given an average temperature  
+- 🧭 Clean UX: hero cover, KPI cards, intuitive sidebar filters  
+- 🏷️ **Friendly labels** (no raw column names like `start_station_name`)
 
 ---
+
+## 🖼️ Screenshots
+
+> Replace with your own images stored under `reports/screenshots/`.
+
+- **Intro & KPIs**  
+  ![Intro](reports/screenshots/intro_kpis.png)
+
+- **Weather vs Usage**  
+  ![Weather vs Usage](reports/screenshots/weather_vs_usage.png)
+
+- **Top Stations & Pareto**  
+  ![Stations](reports/screenshots/station_popularity.png)
+
+- **Trip Flows (Sankey/Kepler)**  
+  ![Flows](reports/screenshots/flows_sankey.png)
+
+- **Weekday × Hour Heatmap**  
+  ![Heatmap](reports/screenshots/weekday_hour_heatmap.png)
+
+---
+
+## ⚙️ How it Works
+
+- Loads a lightweight CSV (≤ ~25 MB) at `data/processed/reduced_citibike_2022.csv`
+- Normalizes dates and derives **season**; creates a **daily table** automatically if needed
+- Adds optional weather signals (temperature, precipitation bin, wind) and a **Comfort Index**
+- Sidebar filters for **date range, season, user type, temperature**
+- Charts are fully **interactive Plotly visuals**, updated dynamically with filters
+
+---
+
+## 🌦️ Data
+
+- **Trips:** Citi Bike NYC (2022)  
+  App expects a reduced sample or daily aggregate at:
+# 🚲 NYC Citi Bike — 2022 Weather & Usage Analytics
+
+[![Streamlit App](https://img.shields.io/badge/Live%20App-Streamlit-brightgreen?logo=streamlit)](https://citi-bike-2022-weather-yewjc77stq3kroa9s8ffrm.streamlit.app/)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg?logo=python)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.x-FF4B4B.svg?logo=streamlit&logoColor=white)
+![Plotly](https://img.shields.io/badge/Plotly-graphing-3D77B6.svg)
+![Status](https://img.shields.io/badge/Status-Active-success.svg)
+
+**Interactive, decision-oriented dashboard** that explores how **weather** shapes **Citi Bike demand** across New York City in **2022**.  
+It highlights seasonality, station concentration (Pareto), OD flows, diurnal patterns, and includes a **What-If** tool to estimate rides at a given temperature.
+
+> 🔴 **Live app:** [citi-bike-2022-weather.streamlit.app](https://citi-bike-2022-weather-yewjc77stq3kroa9s8ffrm.streamlit.app/)
+
+---
+
+## 🧭 Table of Contents
+- [✨ Highlights](#-highlights)
+- [🖼️ Screenshots](#️-screenshots)
+- [⚙️ How it Works](#️-how-it-works)
+- [🌦️ Data](#️-data)
+- [📊 Features by Page](#-features-by-page)
+- [📈 KPIs](#-kpis)
+- [🧰 Tech Stack](#-tech-stack)
+- [💻 Local Setup](#-local-setup)
+- [📁 Repository Structure](#-repository-structure)
+- [⚡ Performance Notes](#-performance-notes)
+- [🗺️ Roadmap](#️-roadmap)
+- [🤝 Contributing](#-contributing)
+- [📜 License & Attribution](#-license--attribution)
+- [❓ FAQ / Troubleshooting](#-faq--troubleshooting)
+
+---
+
+## ✨ Highlights
+
+- 🌡️ **Weather ↔ Usage correlation** with dual-axis time series & scatter + linear fit  
+- 🧊 **Comfort Index** + **precipitation bins** to visualize weather impacts  
+- 🚉 **Station Intelligence**: Top stations, Pareto concentration, Sankey OD flows, Kepler.gl map  
+- 📆 **Temporal Patterns**: Weekday × hour heatmap, monthly trend with moving average  
+- 🧮 **What-If Simulator**: predict expected rides given an average temperature  
+- 🧭 Clean UX: hero cover, KPI cards, intuitive sidebar filters  
+- 🏷️ **Friendly labels** (no raw column names like `start_station_name`)
+
+---
+
+## 🖼️ Screenshots
+
+> Replace with your own images stored under `reports/screenshots/`.
+
+- **Intro & KPIs**  
+  ![Intro](reports/screenshots/intro_kpis.png)
+
+- **Weather vs Usage**  
+  ![Weather vs Usage](reports/screenshots/weather_vs_usage.png)
+
+- **Top Stations & Pareto**  
+  ![Stations](reports/screenshots/station_popularity.png)
+
+- **Trip Flows (Sankey/Kepler)**  
+  ![Flows](reports/screenshots/flows_sankey.png)
+
+- **Weekday × Hour Heatmap**  
+  ![Heatmap](reports/screenshots/weekday_hour_heatmap.png)
+
+---
+
+## ⚙️ How it Works
+
+- Loads a lightweight CSV (≤ ~25 MB) at `data/processed/reduced_citibike_2022.csv`
+- Normalizes dates and derives **season**; creates a **daily table** automatically if needed
+- Adds optional weather signals (temperature, precipitation bin, wind) and a **Comfort Index**
+- Sidebar filters for **date range, season, user type, temperature**
+- Charts are fully **interactive Plotly visuals**, updated dynamically with filters
+
+---
+
+## 🌦️ Data
+
+- **Trips:** Citi Bike NYC (2022)  
+  App expects a reduced sample or daily aggregate at:
+data/processed/reduced_citibike_2022.csv
+
+Columns automatically detected:
+- Trip-level → `started_at`, `start_station_name`, `end_station_name`, `member_casual` / `usertype`
+- Daily-level → `date`, `bike_rides_daily`
+- **Weather:** merged daily metrics (optional) → `avg_temp_c`, `precip_mm`, `wind_kph`, `humidity`
+- **Map HTMLs (optional):**
+- `reports/map/citibike_trip_flows_2022.html`
+- `reports/map/NYC_Bike_Trips_Aggregated.html`
+
+> 💡 The app auto-detects column alternatives (`avgTemp`, `avg_temp`, `temperature_c`).
+
+---
+
+## 📊 Features by Page
+
+### 🏠 Intro
+- Cover image: `reports/cover_bike.webp`  
+- KPI cards show:
+- 🧮 **Total Trips**
+- 📅 **Daily Average**
+- 🌡️ **Temp Impact**
+- 🌦️ **Weather Impact**
+- 🏆 **Peak Season**
+
+### 🌤️ Weather vs Bike Usage
+- Dual-axis: **Rides vs Temperature**
+- Overlay: **Comfort Index**
+- Scatter + regression line colored by precipitation bin
+
+### 📊 Correlation & Distributions
+- Daily **correlation matrix** of metrics (rides, temp, wind, precip)
+- **Seasonal violin** plots of ride distributions
+- **Box plots** for precipitation categories
+
+### 🍂 Seasonal Patterns
+- **Monthly rides** with 3-month moving average
+- **Top stations per season** — facet charts with readable station names
+
+### 🚉 Station Popularity
+- Top N start stations (with CSV export)
+- Clear labels & tooltips
+
+### 📈 Pareto: Share of Rides
+- Cumulative curve → identify top share of stations (e.g., “Top 20% = 80% of rides”)
+
+### 🗺️ Trip Flows Map
+- Embed Kepler.gl map (if available)
+- Sankey: top 20 origin–destination flows
+
+### ⏰ Weekday × Hour Heatmap
+- 7×24 matrix showing temporal load patterns
+
+### 🧪 What-If: Temp → Rides
+- Linear model: `rides ≈ a × temp + b`
+- Slider to simulate expected rides by temperature
+
+### 🚀 Recommendations
+- 🔧 Ops tips: staging, commute windows, OD corridors, anomalies
+
+---
+
+## 📈 KPIs
+
+| KPI | Description |
+|------|-------------|
+| 🧮 **Total Trips** | Total rides in the selected range |
+| 📅 **Daily Average** | Average rides per day |
+| 🌡️ **Temp ↔ Rides** | Correlation coefficient between temperature and rides |
+| 🌦️ **Weather Impact** | % uplift for good vs bad weather |
+| 🏆 **Peak Season** | Season with the highest average rides |
+
+---
+
+## 🧰 Tech Stack
+
+- 🖥️ **Streamlit** — UI and interactivity  
+- 🧮 **Pandas / NumPy** — data processing  
+- 📊 **Plotly** — visualization engine  
+- 🗺️ **Kepler.gl** — spatial mapping *(optional)*  
+- 🐍 **Python 3.10+**
+
+---
+
+## 💻 Local Setup
+
+```bash
+# 1️⃣ Clone the repo
+git clone https://github.com/moeinmmm70/citi-bike-2022-weather.git
+cd citi-bike-2022-weather
+
+# 2️⃣ Create & activate virtual environment
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+
+# 3️⃣ Install dependencies
+pip install -r requirements.txt
+# or minimal
+pip install streamlit pandas numpy plotly
+
+# 4️⃣ Add your processed dataset
+# (≤25 MB daily or trip-level sample)
+data/processed/reduced_citibike_2022.csv
+
+# 5️⃣ Optional: Add maps
+reports/map/citibike_trip_flows_2022.html
+
+# 6️⃣ Run the app
+streamlit run app/st_dashboard_Part_2.py
 
 ## 📁 Repository Structure
 
-> Click through to explore folders/files in this repo.
+> 📂 Click through to explore folders/files in this repo.
 
 - [`app/`](app/)  
   - [`st_dashboard_Part_2.py`](app/st_dashboard_Part_2.py) — Main Streamlit app (multi-page)  
-  - [`requirements.txt`](app/requirements.txt) — App dependencies for local/dev/Cloud
+  - [`requirements.txt`](app/requirements.txt) — Dependencies for local/dev/Cloud
 - [`data/`](data/)  
   - [`raw/`](data/raw/) — Raw trip & weather data *(git-ignored; placeholder only)*  
   - [`processed/`](data/processed/)  
-    - [`reduced_citibike_2022.csv`](data/processed/reduced_citibike_2022.csv) — **≤25MB** sample used by the app
+    - [`reduced_citibike_2022.csv`](data/processed/reduced_citibike_2022.csv) — **≤25 MB** sample used by the app
 - [`notebooks/`](notebooks/) — Jupyter notebooks for download, cleaning, merging, sampling  
 - [`reports/`](reports/)  
   - [`map/`](reports/map/)  
@@ -35,198 +287,62 @@
 - [`.gitignore`](.gitignore) — excludes large data and local artifacts  
 - [`README.md`](README.md) — you are here
 
-> 💡 **Note:** Large raw datasets are intentionally **excluded** from version control. Only the **processed, reduced sample** needed for the app is tracked.
+> 💡 **Note:** Large raw datasets are intentionally **excluded** from version control. Only the processed sample is tracked for reproducibility.
+
+## ⚡ Performance Notes
+
+- Optimized for **≤25 MB** data — runs smoothly on Streamlit Cloud  
+- Uses `@st.cache_data` for efficient reloading  
+- Converts station names to `category` dtype for memory efficiency  
+- Daily aggregations cached and reused across visualizations  
 
 ---
 
-## 🗃️ Data
+## 🗺️ Roadmap
 
-- **Citi Bike trips (2022)**: trip-level records (e.g., `started_at`, station names).  
-- **Daily weather for NYC (2022)**: aggregated to daily average temperature.
-
-The app reads a **processed sample** at:
-
-- [`data/processed/`](data/processed/reduced_citibike_2022.csv)
-
-
-**Columns expected by the app** (any extras are fine):
-
-- `date` (daily date)  
-- **Either** `bike_rides_daily` (daily aggregated count) **or** raw trip rows with `started_at`  
-- Optional: `avg_temp_c` (daily average temperature in °C)  
-- Optional: `season` (Winter/Spring/Summer/Autumn); if missing, the app infers it from `date`
+- 🌧️ Add precipitation & wind to the What-If model (multivariate)  
+- 📈 Integrate **ARIMA/Prophet** forecasting for seasonal demand  
+- 🚨 Detect station-level anomalies (events, outages)  
+- 📄 Export insights as PDF/PNG reports  
+- 🔁 Year switcher for 2023/2024 datasets  
 
 ---
 
-## ✂️ Creating the ≤ 25 MB Sample
+## 🤝 Contributing
 
-If you’re working from trip-level data, create a light sample and keep only the columns you need. Example:
-
-```python
-import pandas as pd
-import numpy as np
-
-# Load your full dataset (trip-level)
-df = pd.read_csv("data/raw/citibike_2022_full.csv", low_memory=False)
-
-# (Optional) parse dates for later grouping
-df["started_at"] = pd.to_datetime(df["started_at"], errors="coerce")
-
-# Keep only columns you actually need for the app
-cols = [
-    "started_at", "start_station_name",  # trip-level charts
-    # if you already computed daily aggregates and weather, include those:
-    "date", "bike_rides_daily", "avg_temp_c", "season"
-]
-df = df[[c for c in cols if c in df.columns]]
-
-# Make a reproducible downsample (adjust frac until the CSV is <25MB)
-np.random.seed(32)
-sample = df.sample(frac=0.08, replace=False, random_state=32)  # ~8% as a starting point
-
-# Save to processed/
-sample.to_csv("data/processed/reduced_citibike_2022.csv", index=False)
-```
-
-- If **`bike_rides_daily`** is missing, the app automatically computes daily ride counts based on the **`started_at`** timestamp.  
-- If **`season`** is missing, the app derives it from the **month** as follows:  
-  - **Winter:** December–February (12–2)  
-  - **Spring:** March–May (3–5)  
-  - **Summer:** June–August (6–8)  
-  - **Autumn:** September–November (9–11)
-
-## 💻 Run Locally
-
-### 1️⃣ Clone & create a virtual environment
-```bash
-git clone https://github.com/moeinmmm70/citi-bike-2022-weather.git
-cd citi-bike-2022-weather
-python -m venv .venv
-# macOS/Linux:
-source .venv/bin/activate
-# Windows:
-# .venv\Scripts\activate
-```
-
-### 2️⃣ Install requirements
-```bash
-pip install -r app/requirements.txt
-```
-
-### 3️⃣ Ensure the sample data exists
-Place the file:
-```bash
-data/processed/reduced_citibike_2022.csv  (≤ 25 MB)
-```
-### 4️⃣ Map HTML
-Export your Kepler.gl map to either:
-```bash
-reports/map/citibike_trip_flows_2022.html
-# or
-reports/map/NYC_Bike_Trips_Aggregated.html
-```
-
-### 5️⃣ Run the app
-```bash
-streamlit run app/st_dashboard_Part_2.py
-```
-
-## 🧭 App Pages & Decisions
-
-### 🏁 Intro
-Explains what the dashboard covers, the sample scope, and how to navigate.
+Pull requests are welcome!  
+You can help improve:
+- 🧮 Data preprocessing scripts  
+- 🎨 Visual styling (Plotly layouts, annotations)  
+- 🔬 Modeling enhancements (comfort index, weather imputation)  
 
 ---
 
-### 🌤️ Weather vs Bike Usage (dual-axis line)
-**Shows:** strong seasonality — warm months (≈ May–Oct) correlate with higher ride volumes.  
-**Decision:** scale dock stock and rebalancing windows on warm days and during warm months.
+## 📜 License & Attribution
+
+- Code licensed under **MIT** (open & reusable)  
+- Data from **Citi Bike NYC** and public weather sources  
+- _This project is not affiliated with Citi Bike._  
 
 ---
 
-### 🚉 Most Popular Stations (bar + season filter + KPIs)
-**Shows:** demand concentrates at a handful of hubs (waterfront, Midtown, commute nodes).  
-**Decision:** prioritize dock capacity and proactive rebalancing at hotspots — especially in summer and during commute peaks.
+## ❓ FAQ / Troubleshooting
+
+**⚠️ App says “data file missing.”**  
+→ Ensure `data/processed/reduced_citibike_2022.csv` exists (use small daily sample).
+
+**🗺️ Kepler map page blank.**  
+→ Place one of the HTMLs in `reports/map/`.
+
+**🌡️ Missing temperature values.**  
+→ Provide a column named `avg_temp_c` (or alias: `avgTemp`, `avg_temp`, `temperature_c`).
+
+**🧾 Axis labels look raw.**  
+→ The app auto-renames columns (e.g., “Start Station” instead of `start_station_name`).
 
 ---
 
-### 🗺️ Interactive Trip Flows Map (Kepler.gl HTML)
-**Shows:** corridors and loops connecting the waterfront and CBD; high-volume OD pairs.  
-**Decision:** align truck loop routes with those corridors and stage vehicles near repeated high-flow endpoints.
+### 🙌 Credits
 
----
-
-### ⏰ Extra: Weekday × Hour Heatmap
-**Shows:** AM/PM weekday peaks (commutes) and weekend midday leisure.  
-**Decision:** pre-load commute hubs before **7–9 AM** and **5–7 PM**; shift some rebalancing to late evening.
-
----
-
-## 🚀 Recommendations
-
-- **Scale hotspot capacity** (use portable docks if needed)  
-- **Predictive stocking** by weather + weekday → target ≥ 85 % fill before AM peak, ≥ 70 % before PM peak  
-- **Corridor-aligned logistics** (loop routes + staging)  
-- **Rider incentives** to return to under-stocked docks  
-
-**KPIs:**  
-- Dock-out rate < 5 % (peaks)  
-- Complaints ↓ 30 % MoM  
-- Truck miles per rebalanced bike ↓ 15 %  
-- On-time dock readiness ≥ 90 %
-
-## 🌐 Deploy on Streamlit Community Cloud
-
-1. Push your repo with the **`app/`** code, **processed sample CSV (≤ 25 MB)**, and any **map HTMLs**.  
-2. In **Streamlit Cloud**, point to:  
-- [`app/`](app/st_dashboard_Part_2.py)
-3. Ensure **`app/requirements.txt`** includes all required packages.  
-4. If you change data or theme, use **“Clear cache” → “Restart”**.
-
-> ⚙️ **Tip:** If builds stall on heavy wheels, keep dependencies lean and pre-export map HTMLs instead of rendering maps server-side.
-
-## 🔁 Reproducibility & Notes
-
-- The sample generation uses a fixed seed (**32**) for reproducibility.  
-
-- The app is **resilient**:  
-  - If **`bike_rides_daily`** is missing → it aggregates from **`started_at`**.  
-  - If **`season`** is missing → it’s computed from **month**.
-  - Temperature is optional.
-
-- Charts use accessibility-friendly colors (**`plotly_white`** theme + colorblind-safe palette).
-
-## 🧭 Roadmap / Next Steps
-
-- Add **per-station inventory** (if available) to tighten operational recommendations.  
-- Integrate **events/holidays** and **precipitation/wind** to explain residual variance.  
-- Develop and deploy a **next-day stocking model** with station-level targets.  
-- Implement a **CI workflow** to lint/test notebooks and the app on pull requests (PRs).
-
-## 📝 License & Credit
-
-- **Data:** Public sources (Citi Bike trip data & NYC weather); respect each source’s terms.  
-- **Code:** MIT License *(or your preferred license)*.  
-- **Author:** **Moein Mellat** — built for a strategy stakeholder audience, with a bias toward actionable operational decisions.
-
-## ⚡ Quick Start (TL;DR)
-
-```bash
-git clone https://github.com/moeinmmm70/citi-bike-2022-weather.git
-cd citi-bike-2022-weather
-python -m venv .venv && source .venv/bin/activate
-pip install -r app/requirements.txt
-
-# Make sure this file exists and is <25 MB:
-# data/processed/reduced_citibike_2022.csv
-
-streamlit run app/st_dashboard_Part_2.py
-```
-
-> 💡 **Tip:**  
-> If something breaks, it’s usually one of the following:  
-> - Python version mismatch  
-> - Missing sample CSV  
-> - Missing Kepler HTML  
->  
-> Fix those and you’re back in business. ✅
+Built with ❤️ by **Moein Mellat**  
+Made for curious minds and data-driven urban explorers.
