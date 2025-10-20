@@ -904,7 +904,7 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
     if not need.issubset(df_f.columns):
         st.info("Need duration, distance, and speed (engineered in load_data).")
     else:
-        # Controls
+        # ── Controls
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             robust = st.checkbox("Robust clipping (99.5%)", value=True, help="Hide extreme outliers that crush the axes.")
@@ -915,7 +915,7 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
         with c4:
             log_speed = st.checkbox("Log X: Speed", value=False)
 
-        # Inlier masks + physical bounds
+        # ── Inlier masks + physical bounds
         m_dur = (inlier_mask(df_f, "duration_min", hi=0.995) if robust else pd.Series(True, index=df_f.index)) & \
                 df_f["duration_min"].between(0.5, 240, inclusive="both")
         m_dst = (inlier_mask(df_f, "distance_km", hi=0.995)  if robust else pd.Series(True, index=df_f.index)) & \
@@ -930,10 +930,12 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
         with cA:
             d = df_f.loc[m_dur, "duration_min"]
             ql, qh = d.quantile([0.01, 0.995]).tolist()
-            fig = px.histogram(d, x="duration_min", nbins=60,
-                               labels={"duration_min":"Duration (min)"},
-                               log_x=log_duration,
-                               range_x=[ql, qh] if robust and not log_duration else None)
+            fig = px.histogram(
+                d, x="duration_min", nbins=60,
+                labels={"duration_min":"Duration (min)"},
+                log_x=log_duration,
+                range_x=[ql, qh] if robust and not log_duration else None
+            )
             fig.update_layout(height=420)
             st.plotly_chart(fig, use_container_width=True)
             st.caption(f"Clipped rows (duration): {clipped_dur:,}")
@@ -941,10 +943,12 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
         with cB:
             d = df_f.loc[m_dst, "distance_km"]
             ql, qh = d.quantile([0.01, 0.995]).tolist()
-            fig = px.histogram(d, x="distance_km", nbins=60,
-                               labels={"distance_km":"Distance (km)"},
-                               log_x=log_distance,
-                               range_x=[ql, qh] if robust and not log_distance else None)
+            fig = px.histogram(
+                d, x="distance_km", nbins=60,
+                labels={"distance_km":"Distance (km)"},
+                log_x=log_distance,
+                range_x=[ql, qh] if robust and not log_distance else None
+            )
             fig.update_layout(height=420)
             st.plotly_chart(fig, use_container_width=True)
             st.caption(f"Clipped rows (distance): {clipped_dst:,}")
@@ -952,10 +956,12 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
         with cC:
             d = df_f.loc[m_spd, "speed_kmh"]
             ql, qh = d.quantile([0.01, 0.995]).tolist()
-            fig = px.histogram(d, x="speed_kmh", nbins=60,
-                               labels={"speed_kmh":"Speed (km/h)"},
-                               log_x=log_speed,
-                               range_x=[ql, qh] if robust and not log_speed else None)
+            fig = px.histogram(
+                d, x="speed_kmh", nbins=60,
+                labels={"speed_kmh":"Speed (km/h)"},
+                log_x=log_speed,
+                range_x=[ql, qh] if robust and not log_speed else None
+            )
             fig.update_layout(height=420)
             st.plotly_chart(fig, use_container_width=True)
             st.caption(f"Clipped rows (speed): {clipped_spd:,}")
@@ -988,7 +994,7 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
         fig2.update_layout(height=520)
         st.plotly_chart(fig2, use_container_width=True)
 
-        # ===== Weather relationships (new) =====
+        # ===== Weather relationships =====
         def _add_fit_line(fig_, xvals, yvals, name):
             # robust: require at least 3 valid points and 2 unique x's
             x = pd.to_numeric(xvals, errors="coerce")
@@ -1039,7 +1045,7 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
             else:
                 st.info("No wind column available for this view.")
 
-        # Distance/Duration vs Temperature (optional, helps tell comfort story)
+        # Distance/Duration vs Temperature (comfort story)
         c3, c4 = st.columns(2)
         with c3:
             if temp_ok:
@@ -1066,6 +1072,35 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
                 figDxT = _add_fit_line(figDxT, dat["avg_temp_c"], dat["distance_km"], "Linear fit")
                 figDxT.update_layout(height=420, title="Distance vs Temperature")
                 st.plotly_chart(figDxT, use_container_width=True)
+
+        # ===== 2D density: distance vs duration =====
+        st.markdown("### 🔳 2D density: distance vs duration")
+        try:
+            inliers_sample = inliers.sample(n=min(len(inliers), 60000), random_state=11) if len(inliers) > 60000 else inliers
+            fig_hex = px.density_heatmap(
+                inliers_sample, x="distance_km", y="duration_min",
+                nbinsx=60, nbinsy=60, histfunc="count",
+                labels={"distance_km":"Distance (km)", "duration_min":"Duration (min)"},
+                color_continuous_scale="Viridis"
+            )
+            fig_hex.update_layout(height=520)
+            st.plotly_chart(fig_hex, use_container_width=True)
+        except Exception as e:
+            st.caption(f"Density heatmap unavailable: {e}")
+
+        # ===== Correlations (quick view) =====
+        st.markdown("### 🔗 Correlations (quick view)")
+        corr_cols = [c for c in ["duration_min","distance_km","speed_kmh","avg_temp_c","wind_kph"] if c in df_f.columns]
+        if len(corr_cols) >= 2:
+            corr_mat = df_f[corr_cols].corr(numeric_only=True)
+            fig_corr = px.imshow(
+                corr_mat, text_auto=True, aspect="auto",
+                labels=dict(color="r")
+            )
+            fig_corr.update_layout(height=420)
+            st.plotly_chart(fig_corr, use_container_width=True)
+        else:
+            st.caption("Not enough numeric columns to compute a correlation matrix.")
 
         # ===== Rain/Wet impact on duration & speed =====
         st.subheader("Rain impact on trip characteristics")
@@ -1117,7 +1152,7 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
 
         # ===== Quick weather deltas (KPIs) =====
         k1, k2, k3, k4 = st.columns(4)
-        # Wet vs Dry (speed)
+
         with k1:
             if has_wet_flag and df_f["wet_day"].notna().any():
                 dry_spd = df_f.loc[m_spd & (df_f["wet_day"]==0), "speed_kmh"].mean()
@@ -1125,7 +1160,6 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
                 if pd.notnull(dry_spd) and pd.notnull(wet_spd) and dry_spd>0:
                     st.metric("Speed: Wet vs Dry", f"{(wet_spd-dry_spd)/dry_spd*100:+.1f}%")
 
-        # Windy vs Calm (speed)
         with k2:
             if wind_ok:
                 calm_spd   = df_f.loc[m_spd & (df_f["wind_kph"]<10),  "speed_kmh"].mean()
@@ -1133,7 +1167,6 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
                 if pd.notnull(calm_spd) and pd.notnull(windy_spd) and calm_spd>0:
                     st.metric("Speed: Windy (≥20) vs Calm (<10)", f"{(windy_spd-calm_spd)/calm_spd*100:+.1f}%")
 
-        # Comfy vs Extreme temps (speed)
         with k3:
             if temp_ok:
                 comfy = df_f.loc[m_spd & df_f["avg_temp_c"].between(15,25), "speed_kmh"].mean()
@@ -1141,7 +1174,6 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
                 if pd.notnull(comfy) and pd.notnull(extreme):
                     st.metric("Speed: Comfy (15–25°C) vs Extreme", f"{(comfy-extreme)/comfy*100:+.1f}%")
 
-        # Rain effect on duration (optional)
         with k4:
             if has_precip_bin:
                 low_dur  = df_f.loc[m_dur & (df_f["precip_bin"]=="Low"), "duration_min"].mean()
