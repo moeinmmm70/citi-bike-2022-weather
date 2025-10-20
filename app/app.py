@@ -2570,7 +2570,6 @@ elif (
         "top_stations_leaderboard.csv", "text/csv"
     )
 
-
 # ───────────────────────── Station imbalance (arrivals − departures) ─────────────────────────
 elif (
     page == "Station Imbalance (In vs Out)"
