@@ -1585,239 +1585,262 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
 elif page == "Member vs Casual Profiles":
     st.header("👥 Member vs Casual riding patterns")
 
-    # Guard
+    # ─────────── Guards & clean member labels (ASCII only for charts) ───────────
     if "member_type" not in df_f.columns or "hour" not in df_f.columns:
-        st.info("Need member_type and started_at (engineered hour).")
-    else:
-        # ------------------------------------------------------------------
-        # 1) Clean, ASCII-only member labels to avoid JSON encoding issues
-        # ------------------------------------------------------------------
-        SAFE_MEMBER_LABELS = {"member": "Member", "casual": "Casual"}
-        def _asciify_member(s):
-            s = str(s) if s is not None else ""
-            return SAFE_MEMBER_LABELS.get(s.lower(), s.title())
+        st.info("Need `member_type` and `started_at` (engineered `hour`).")
+        st.stop()
 
-        base = df_f.copy()
-        base["member_type_clean"] = base["member_type"].astype(str).map(_asciify_member).astype("category")
+    # Normalize/canonicalize member labels (ASCII)
+    df_mc = df_f.copy()
+    df_mc["member_type_clean"] = (
+        df_mc["member_type"].astype(str).str.strip().str.lower().map({"member": "Member", "casual": "Casual"})
+    ).fillna("Other")
 
-        # ------------------------------------------------------------------
-        # 2) Hourly and weekday profiles
-        # ------------------------------------------------------------------
-        st.subheader("Behavioral profiles")
+    # Pretty name (safe for UI text; keep ASCII inside Plotly series/legend)
+    legend_member_title = "Member Type"
 
-        # Hourly
-        g_hour = (
-            base.groupby(["member_type_clean", "hour"])
-            .size().rename("rides").reset_index()
-        )
+    # ─────────── KPI helpers ───────────
+    def _safe_median(s): 
+        s = pd.to_numeric(s, errors="coerce")
+        return float(s.median()) if s.notna().any() else float("nan")
+
+    def _safe_mean(s):
+        s = pd.to_numeric(s, errors="coerce")
+        return float(s.mean()) if s.notna().any() else float("nan")
+
+    # Per-group aggregates
+    grp = df_mc.groupby("member_type_clean", as_index=False).agg(
+        rides=("member_type_clean", "size"),
+        duration_med=("duration_min", _safe_median) if "duration_min" in df_mc.columns else ("member_type_clean", "size"),
+        distance_med=("distance_km", _safe_median) if "distance_km" in df_mc.columns else ("member_type_clean", "size"),
+        speed_med=("speed_kmh", _safe_median) if "speed_kmh" in df_mc.columns else ("member_type_clean", "size"),
+    )
+
+    # Rain penalty (wet vs dry) on daily rides if available
+    rain_penalty = None
+    if "wet_day" in df_mc.columns:
+        dry = df_mc.loc[df_mc["wet_day"] == 0].groupby("member_type_clean").size()
+        wet = df_mc.loc[df_mc["wet_day"] == 1].groupby("member_type_clean").size()
+        rain_penalty = (wet / dry - 1.0) * 100.0
+        rain_penalty = rain_penalty.replace([np.inf, -np.inf], np.nan)
+
+    # Temperature preference gap (median temp during rides) if available
+    temp_gap = None
+    if "avg_temp_c" in df_mc.columns:
+        temp_meds = df_mc.groupby("member_type_clean")["avg_temp_c"].median()
+        if {"Member", "Casual"}.issubset(set(temp_meds.index)):
+            temp_gap = float(temp_meds["Casual"] - temp_meds["Member"])
+
+    # ─────────── At-a-glance strip ───────────
+    st.markdown("#### ✨ At-a-glance (selection)")
+    ca, cb, cc, cd, ce = st.columns(5)
+    with ca:
+        total_member = int(grp.loc[grp["member_type_clean"] == "Member", "rides"].sum()) if "Member" in grp["member_type_clean"].values else 0
+        total_casual = int(grp.loc[grp["member_type_clean"] == "Casual", "rides"].sum()) if "Casual" in grp["member_type_clean"].values else 0
+        share_member = (100.0 * total_member / max(total_member + total_casual, 1))
+        st.metric("🧑‍💼 Member share", f"{share_member:.1f}%")
+    with cb:
+        m = grp.set_index("member_type_clean")
+        d_med_m = m.at["Member", "duration_med"] if ("Member" in m.index and "duration_med" in m.columns) else np.nan
+        d_med_c = m.at["Casual", "duration_med"] if ("Casual" in m.index and "duration_med" in m.columns) else np.nan
+        txt = f"{d_med_m:.1f} vs {d_med_c:.1f} min" if np.isfinite(d_med_m) and np.isfinite(d_med_c) else "—"
+        st.metric("⏱️ Median duration", txt)
+    with cc:
+        s_med_m = m.at["Member", "speed_med"] if ("Member" in m.index and "speed_med" in m.columns) else np.nan
+        s_med_c = m.at["Casual", "speed_med"] if ("Casual" in m.index and "speed_med" in m.columns) else np.nan
+        txt = f"{s_med_m:.1f} vs {s_med_c:.1f} km/h" if np.isfinite(s_med_m) and np.isfinite(s_med_c) else "—"
+        st.metric("🚴 Median speed", txt)
+    with cd:
+        if rain_penalty is not None and {"Member","Casual"}.issubset(rain_penalty.index):
+            st.metric("🌧️ Rain penalty (wet vs dry)", f"M {rain_penalty['Member']:+.0f}%  ·  C {rain_penalty['Casual']:+.0f}%")
+        else:
+            st.metric("🌧️ Rain penalty (wet vs dry)", "—")
+    with ce:
+        st.metric("🌡️ Temp preference gap", f"{temp_gap:+.1f}°C (Casual − Member)" if temp_gap is not None and np.isfinite(temp_gap) else "—")
+
+    # ─────────── Tabs ───────────
+    tab_beh, tab_wx, tab_perf, tab_station = st.tabs(
+        ["🕑 Behavior", "🌦️ Weather mix", "📈 Performance vs temp", "📍 Stations"]
+    )
+
+    # ======================= Behavior tab =======================
+    with tab_beh:
+        st.subheader("Daily rhythms")
+        # Hourly profile
+        g_hour = df_mc.groupby(["member_type_clean", "hour"]).size().rename("rides").reset_index()
         fig_h = px.line(
             g_hour, x="hour", y="rides", color="member_type_clean",
-            labels={"hour": "Hour of day", "rides": "Rides", "member_type_clean": "Member type"},
-            markers=True
+            labels={"hour": "Hour of day", "rides": "Rides", "member_type_clean": legend_member_title}
         )
-        fig_h.update_layout(height=380, title="Hourly profile by rider type")
+        fig_h.update_traces(mode="lines+markers", hovertemplate="Hour %{x}:00<br>%{y:,} rides")
+        fig_h.update_layout(height=380, legend_title_text=legend_member_title, title="Hourly profile — Member vs Casual")
         st.plotly_chart(fig_h, use_container_width=True)
 
-        # Weekday
-        if "weekday" in base.columns:
-            g_wk = (
-                base.groupby(["member_type_clean", "weekday"])
-                .size().rename("rides").reset_index()
-            )
-            wk_map = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
-            g_wk["weekday_name"] = g_wk["weekday"].map(wk_map)
+        # Weekday profile
+        if "weekday" in df_mc.columns:
+            g_wd = df_mc.groupby(["member_type_clean", "weekday"]).size().rename("rides").reset_index()
+            g_wd["weekday_name"] = g_wd["weekday"].map({0:"Mon",1:"Tue",2:"Wed",3:"Thu",4:"Fri",5:"Sat",6:"Sun"})
             fig_w = px.line(
-                g_wk, x="weekday_name", y="rides", color="member_type_clean",
-                labels={"weekday_name": "Weekday", "rides": "Rides", "member_type_clean": "Member type"},
-                markers=True
+                g_wd, x="weekday_name", y="rides", color="member_type_clean",
+                labels={"weekday_name": "Weekday", "rides": "Rides", "member_type_clean": legend_member_title}
             )
-            fig_w.update_layout(height=380, title="Weekday profile by rider type")
+            fig_w.update_traces(mode="lines+markers")
+            fig_w.update_layout(height=380, legend_title_text=legend_member_title, title="Weekday profile — Member vs Casual")
             st.plotly_chart(fig_w, use_container_width=True)
 
-        st.markdown("---")
+        # Commute vs leisure contrast (AM/PM shares)
+        st.markdown("##### Commute / leisure contrast")
+        am = df_mc[(df_mc["hour"] >= 7) & (df_mc["hour"] <= 10)]
+        pm = df_mc[(df_mc["hour"] >= 16) & (df_mc["hour"] <= 19)]
+        g_am = am.groupby("member_type_clean").size().rename("rides")
+        g_pm = pm.groupby("member_type_clean").size().rename("rides")
+        base = df_mc.groupby("member_type_clean").size().rename("total")
+        shares = (
+            pd.concat([g_am, g_pm, base], axis=1)
+            .fillna(0.0)
+            .assign(AM=lambda x: 100.0 * x["rides"].iloc[:, 0] / x["total"] if isinstance(x["rides"], pd.DataFrame) else 100.0 * x["rides"] / x["total"])
+        )
+        # Manually compute AM/PM shares (clearer)
+        shares = pd.DataFrame({
+            "member_type_clean": base.index,
+            "AM %": 100.0 * g_am.reindex(base.index, fill_value=0).values / base.values,
+            "PM %": 100.0 * g_pm.reindex(base.index, fill_value=0).values / base.values,
+        })
+        shares = shares.melt(id_vars="member_type_clean", var_name="window", value_name="share")
+        fig_c = px.bar(
+            shares, x="member_type_clean", y="share", color="window", barmode="group",
+            labels={"member_type_clean": legend_member_title, "share": "Share of each group's rides (%)", "window": "Window"}
+        )
+        fig_c.update_layout(height=340, title="Share of rides in AM/PM windows")
+        st.plotly_chart(fig_c, use_container_width=True)
 
-        # ------------------------------------------------------------------
-        # 3) Weather mix and temperate preference
-        # ------------------------------------------------------------------
-        st.subheader("Weather mix and temperature preference")
+    # ======================= Weather tab =======================
+    with tab_wx:
+        st.subheader("Weather sensitivity & mix")
+        c1, c2 = st.columns(2)
 
-        cwx1, cwx2 = st.columns(2)
-
-        # Rain / wet mix
-        with cwx1:
-            if "precip_bin" in base.columns and base["precip_bin"].notna().any():
-                # keep a clear, stable order if present
-                order_precip = ["Low", "Medium", "High"]
-                g_rain = (
-                    base.dropna(subset=["precip_bin"])
-                    .assign(precip_bin=lambda x: pd.Categorical(x["precip_bin"], order_precip, ordered=True))
-                    .groupby(["member_type_clean", "precip_bin"])
-                    .size().rename("rides").reset_index()
+        # Rain mix
+        with c1:
+            if "wet_day" in df_mc.columns:
+                gg = (
+                    df_mc.assign(day_type=lambda x: x["wet_day"].map({0: "Dry", 1: "Wet"}))
+                    .groupby(["member_type_clean", "day_type"]).size().rename("rides").reset_index()
                 )
                 fig_r = px.bar(
-                    g_rain, x="precip_bin", y="rides", color="member_type_clean", barmode="group",
-                    labels={"precip_bin": "Precipitation", "rides": "Rides", "member_type_clean": "Member type"}
+                    gg, x="day_type", y="rides", color="member_type_clean", barmode="group",
+                    labels={"day_type": "Day type", "rides": "Rides", "member_type_clean": legend_member_title}
                 )
-                fig_r.update_layout(height=380, title="Ride volume by precipitation bin")
+                fig_r.update_layout(height=360, title="Ride volume — Wet vs Dry")
                 st.plotly_chart(fig_r, use_container_width=True)
-            elif "wet_day" in base.columns and base["wet_day"].notna().any():
-                g_wet = (
-                    base.assign(day_type=lambda x: x["wet_day"].map({0: "Dry", 1: "Wet"}))
-                    .groupby(["member_type_clean", "day_type"])
-                    .size().rename("rides").reset_index()
-                )
-                fig_wd = px.bar(
-                    g_wet, x="day_type", y="rides", color="member_type_clean", barmode="group",
-                    labels={"day_type": "Day type", "rides": "Rides", "member_type_clean": "Member type"}
-                )
-                fig_wd.update_layout(height=380, title="Ride volume: Wet vs Dry")
-                st.plotly_chart(fig_wd, use_container_width=True)
             else:
-                st.info("No rain columns (precip_bin or wet_day) available.")
+                st.info("No `wet_day` column available.")
 
-        # Temperature distribution by rider type
-        with cwx2:
-            if "avg_temp_c" in base.columns and base["avg_temp_c"].notna().any():
-                vdat = base.dropna(subset=["avg_temp_c"])
+        # Temperature where each group rides
+        with c2:
+            if "avg_temp_c" in df_mc.columns and df_mc["avg_temp_c"].notna().any():
+                vdat = df_mc.dropna(subset=["avg_temp_c"])
                 fig_v = px.violin(
                     vdat, x="member_type_clean", y="avg_temp_c", box=True, points=False,
-                    labels={"member_type_clean": "Member type", "avg_temp_c": "Avg temperature during rides (C)"}
+                    labels={"member_type_clean": legend_member_title, "avg_temp_c": "Avg temp during rides (°C)"}
                 )
-                fig_v.update_layout(height=380, title="Where each group rides by temperature")
+                fig_v.update_layout(height=360, title="Temperature distribution by group")
                 st.plotly_chart(fig_v, use_container_width=True)
             else:
-                st.info("Temperature not available to plot distributions.")
+                st.info("Temperature not available.")
 
-        st.markdown("---")
-
-        # ------------------------------------------------------------------
-        # 4) Wind effect
-        # ------------------------------------------------------------------
-        st.subheader("Wind effect by rider type")
-        if "wind_bin" in base.columns and base["wind_bin"].notna().any():
-            order_wind = ["Calm", "Breeze", "Windy", "Very Windy"]
-            present = [x for x in order_wind if x in base["wind_bin"].astype(str).unique().tolist()]
-            g_wind = (
-                base.dropna(subset=["wind_bin"])
-                .assign(wind_bin=lambda x: pd.Categorical(x["wind_bin"], present if present else None, ordered=True))
-                .groupby(["member_type_clean", "wind_bin"])
-                .size().rename("rides").reset_index()
+        # Wind effect
+        st.markdown("##### Wind effect by user type")
+        if "wind_kph" in df_mc.columns and df_mc["wind_kph"].notna().any():
+            bins = [-1, 10, 20, 30, 200]
+            labels_w = ["<10", "10–20", "20–30", "30+"]
+            g_w = (
+                df_mc.assign(wind_band=lambda x: pd.cut(x["wind_kph"], bins, labels=labels_w, include_lowest=True))
+                .groupby(["member_type_clean", "wind_band"]).size().rename("rides").reset_index()
             )
             fig_wind = px.bar(
-                g_wind, x="wind_bin", y="rides", color="member_type_clean", barmode="group",
-                labels={"wind_bin": "Wind", "rides": "Rides", "member_type_clean": "Member type"}
+                g_w, x="wind_band", y="rides", color="member_type_clean", barmode="group",
+                labels={"wind_band": "Wind (kph)", "rides": "Rides", "member_type_clean": legend_member_title}
             )
-            fig_wind.update_layout(height=380, title="Ride volume by wind condition")
+            fig_wind.update_layout(height=360, title="Ride volume by wind band")
             st.plotly_chart(fig_wind, use_container_width=True)
-        elif "wind_kph" in base.columns and base["wind_kph"].notna().any():
-            bins = [-1, 10, 20, 30, 200]
-            labels_w = ["<10", "10-20", "20-30", "30+"]
-            g_wind2 = (
-                base.assign(wind_bin=lambda x: pd.cut(x["wind_kph"], bins, labels=labels_w, include_lowest=True))
-                .groupby(["member_type_clean", "wind_bin"])
-                .size().rename("rides").reset_index()
-            )
-            fig_wind2 = px.bar(
-                g_wind2, x="wind_bin", y="rides", color="member_type_clean", barmode="group",
-                labels={"wind_bin": "Wind (kph)", "rides": "Rides", "member_type_clean": "Member type"}
-            )
-            fig_wind2.update_layout(height=380, title="Ride volume by wind (kph)")
-            st.plotly_chart(fig_wind2, use_container_width=True)
         else:
-            st.info("No wind columns available.")
+            st.info("No `wind_kph` data.")
 
-        st.markdown("---")
-
-        # ------------------------------------------------------------------
-        # 5) Performance vs temperature (median speed and duration by band)
-        # ------------------------------------------------------------------
-        st.subheader("Performance vs temperature")
-        if {"avg_temp_c", "speed_kmh", "duration_min"}.issubset(base.columns) and base["avg_temp_c"].notna().any():
+    # ======================= Performance tab =======================
+    with tab_perf:
+        st.subheader("Speed & duration vs temperature")
+        ok_cols = {"avg_temp_c", "speed_kmh", "duration_min"}
+        if ok_cols.issubset(df_mc.columns) and df_mc["avg_temp_c"].notna().any():
+            # Median trends by temp band
             tbins = [-20, -5, 0, 5, 10, 15, 20, 25, 30, 35, 50]
-            tlabs = ["<-5", "-5-0", "0-5", "5-10", "10-15", "15-20", "20-25", "25-30", "30-35", ">35"]
-            dat = base.dropna(subset=["avg_temp_c"]).copy()
+            tlabs = ["<-5", "-5–0", "0–5", "5–10", "10–15", "15–20", "20–25", "25–30", "30–35", ">35"]
+            dat = df_mc.dropna(subset=["avg_temp_c"]).copy()
             dat["temp_band"] = pd.cut(dat["avg_temp_c"], tbins, labels=tlabs, include_lowest=True)
 
-            # Median speed
-            gs = (
-                dat.groupby(["member_type_clean", "temp_band"])["speed_kmh"]
-                .median().reset_index().dropna(subset=["temp_band"])
-            )
+            # Speed
+            gs = (dat.groupby(["member_type_clean", "temp_band"])["speed_kmh"]
+                  .median().reset_index().dropna(subset=["temp_band"]))
             figS = px.line(
                 gs, x="temp_band", y="speed_kmh", color="member_type_clean", markers=True,
-                labels={"temp_band": "Temperature band (C)", "speed_kmh": "Median speed (km/h)", "member_type_clean": "Member type"}
+                labels={"temp_band": "Temperature band (°C)", "speed_kmh": "Median speed (km/h)", "member_type_clean": legend_member_title}
             )
-            figS.update_layout(height=360, title="Median speed by temperature band")
+            figS.update_layout(height=380, title="Median speed by temperature")
             st.plotly_chart(figS, use_container_width=True)
 
-            # Median duration
-            gd = (
-                dat.groupby(["member_type_clean", "temp_band"])["duration_min"]
-                .median().reset_index().dropna(subset=["temp_band"])
-            )
+            # Duration
+            gd = (dat.groupby(["member_type_clean", "temp_band"])["duration_min"]
+                  .median().reset_index().dropna(subset=["temp_band"]))
             figD = px.line(
                 gd, x="temp_band", y="duration_min", color="member_type_clean", markers=True,
-                labels={"temp_band": "Temperature band (C)", "duration_min": "Median duration (min)", "member_type_clean": "Member type"}
+                labels={"temp_band": "Temperature band (°C)", "duration_min": "Median duration (min)", "member_type_clean": legend_member_title}
             )
-            figD.update_layout(height=360, title="Median duration by temperature band")
+            figD.update_layout(height=380, title="Median duration by temperature")
             st.plotly_chart(figD, use_container_width=True)
         else:
-            st.info("Need avg_temp_c, duration_min, and speed_kmh to chart performance vs temperature.")
+            st.info("Need `avg_temp_c`, `duration_min`, and `speed_kmh` for these charts.")
 
-        st.markdown("---")
-
-        # ------------------------------------------------------------------
-        # 6) Station preferences and lift (share vs overall) - ASCII safe
-        # ------------------------------------------------------------------
-        st.subheader("Station preferences (share vs overall)")
-        if "start_station_name" in base.columns:
-            topN = st.slider("Top N stations", 5, 40, 15, 5)
-            # Overall shares
-            overall = (
-                base.groupby("start_station_name").size()
-                .rename("rides").reset_index()
-            )
-            total_overall = float(overall["rides"].sum())
-            overall["p_overall"] = overall["rides"] / total_overall if total_overall > 0 else 0.0
-
-            # By rider type
-            g = (
-                base.groupby(["member_type_clean", "start_station_name"]).size()
-                .rename("rides").reset_index()
-            )
-            g["p_type"] = (
-                g.groupby("member_type_clean")["rides"].transform(lambda s: s / float(s.sum()) if float(s.sum()) > 0 else 0.0)
-            )
-
-            # Merge and compute lift; IMPORTANT: do NOT blanket fillna over categoricals
-            mrg = g.merge(overall[["start_station_name", "p_overall"]], on="start_station_name", how="left")
-            if "p_overall" in mrg.columns:
-                mrg["p_overall"] = mrg["p_overall"].astype(float).fillna(0.0)
-
-            mrg["lift"] = mrg["p_type"] - mrg["p_overall"]
-
-            # Top positive lifts per rider type
-            out_rows = []
-            for typ, sub in mrg.groupby("member_type_clean"):
-                top = sub.sort_values("lift", ascending=False).head(topN).copy()
-                top["member_type_clean"] = typ
-                out_rows.append(top[["member_type_clean", "start_station_name", "lift", "p_type", "p_overall"]])
-            if out_rows:
-                top_df = pd.concat(out_rows, ignore_index=True)
-                fig_l = px.bar(
-                    top_df, x="start_station_name", y="lift", color="member_type_clean", barmode="group",
-                    labels={
-                        "start_station_name": "Station",
-                        "lift": "Share lift (type share - overall share)",
-                        "member_type_clean": "Member type",
-                    }
-                )
-                fig_l.update_layout(height=420, title="Top station share lifts by rider type")
-                fig_l.update_xaxes(tickangle=40, tickfont=dict(size=10))
-                st.plotly_chart(fig_l, use_container_width=True)
-                st.caption("Lift = within-type share minus overall share. Positive means over-indexing for that rider type.")
+    # ======================= Stations tab =======================
+    with tab_station:
+        st.subheader("Top stations by user type")
+        if "start_station_name" not in df_mc.columns:
+            st.info("Missing `start_station_name`")
         else:
-            st.info("start_station_name not available.")
+            topN = st.slider("Top N stations", 5, 40, 15, 5)
+            # Leaderboards per group
+            by_group = df_mc.groupby(["member_type_clean", "start_station_name"]).size().rename("rides").reset_index()
+            # Overall totals for lift calc (avoid fillna on categoricals!)
+            overall = df_mc.groupby("start_station_name").size().rename("rides_total").reset_index()
+            overall["p_overall"] = overall["rides_total"] / float(overall["rides_total"].sum())
+
+            g = by_group.sort_values("rides", ascending=False).groupby("member_type_clean").head(topN)
+            mrg = g.merge(overall[["start_station_name", "p_overall"]], on="start_station_name", how="left")
+            mrg["p_overall"] = mrg["p_overall"].fillna(0.0)  # numeric only
+
+            cL, cR = st.columns(2)
+            for label, col in [("Member", cL), ("Casual", cR)]:
+                topk = mrg[mrg["member_type_clean"] == label].copy()
+                if topk.empty:
+                    with col:
+                        st.info(f"No {label} rides in current selection.")
+                    continue
+                # Lift = share within group vs overall share
+                tot = float(by_group.loc[by_group["member_type_clean"] == label, "rides"].sum())
+                topk["p_group"] = topk["rides"] / max(tot, 1.0)
+                topk["lift"] = topk["p_group"] / topk["p_overall"].replace({0.0: np.nan})
+                topk["station_s"] = topk["start_station_name"].astype(str).str.slice(0, 28)
+
+                fig_b = px.bar(
+                    topk.sort_values("lift", ascending=False).head(topN),
+                    x="station_s", y="lift",
+                    hover_data={"start_station_name": True, "rides": ":,", "lift": ":.2f", "p_group": ":.2%", "p_overall": ":.2%"},
+                    labels={"station_s": "Station", "lift": "Lift vs overall"}
+                )
+                fig_b.update_layout(height=420, title=f"Top stations with highest **lift** — {label}")
+                fig_b.update_xaxes(tickangle=45)
+                with col:
+                    st.plotly_chart(fig_b, use_container_width=True)
+
+        st.caption("Lift = (station share within group) / (station share overall). Values >1 indicate stations where a group over-indexes.")
 
 # ───────────────────────── OD Matrix — Top Origins × Destinations ─────────────────────────
 elif page == "OD Matrix — Top Origins × Dest":
