@@ -25,6 +25,12 @@ cover_path = Path("reports/cover_bike.webp")
 RIDES_COLOR = "#1f77b4"
 TEMP_COLOR  = "#d62728"
 
+# Legend / label mapping
+MEMBER_LABELS = {
+    "member": "Member 🧑‍💼",
+    "casual": "Casual 🚲",
+}
+MEMBER_LEGEND_TITLE = "Member Type"
 # ────────────────────────────── Helpers ───────────────────────────────────
 def kfmt(x):
     try:
@@ -227,6 +233,14 @@ def load_data(path: Path, _sig: float | None = None) -> pd.DataFrame:
         if c in df.columns:
             df[c] = df[c].astype("category")
 
+    # Pretty legend text for member_type
+    if "member_type" in df.columns:
+        df["member_type_display"] = (
+            df["member_type"].astype(str)
+               .map(MEMBER_LABELS)
+               .fillna(df["member_type"].astype(str).str.title())
+        ).astype("category")
+        
     return df
 
 def ensure_daily(df: pd.DataFrame) -> pd.DataFrame | None:
@@ -287,7 +301,12 @@ seasons = st.sidebar.multiselect("Season(s)", seasons_all, default=seasons_all) 
 # Member type
 usertype = None
 if "member_type" in df.columns:
-    usertype = st.sidebar.selectbox("User type", ["All"] + sorted(df["member_type"].astype(str).unique().tolist()))
+    raw_opts = ["All"] + sorted(df["member_type"].astype(str).unique().tolist())
+    usertype = st.sidebar.selectbox(
+        "User type",
+        raw_opts,
+        format_func=lambda v: "All" if v == "All" else MEMBER_LABELS.get(v, str(v).title())
+    )
 
 # Temperature filter (optional)
 temp_range = None
@@ -499,7 +518,7 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
             inliers = inliers.sample(n=nmax, random_state=3)
 
         fig2 = px.scatter(inliers, x="distance_km", y="duration_min", color=color_col,
-                          labels={"distance_km":"Distance (km)", "duration_min":"Duration (min)"},
+                          labels={"distance_km":"Distance (km)", "duration_min":"Duration (min)", "member_type_display": MEMBER_LEGEND_TITLE},
                           opacity=0.9)
         if len(outliers):
             fig2.add_trace(go.Scatter(
@@ -523,7 +542,7 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
             if len(in2) > nmax:
                 in2 = in2.sample(n=nmax, random_state=4)
             fig3 = px.scatter(in2, x="avg_temp_c", y="speed_kmh", color=color_col,
-                              labels={"avg_temp_c":"Avg temperature (°C)", "speed_kmh":"Speed (km/h)"},
+                              labels={"avg_temp_c":"Avg temperature (°C)", "speed_kmh":"Speed (km/h)", "member_type_display": MEMBER_LEGEND_TITLE},
                               opacity=0.85)
             fig3.update_layout(height=520)
             st.plotly_chart(fig3, use_container_width=True)
@@ -536,17 +555,17 @@ elif page == "Member vs Casual Profiles":
         st.info("Need `member_type` and `started_at` (engineered hour).")
     else:
         st.subheader("Hourly profile")
-        g = (df_f.groupby(["member_type","hour"]).size().rename("rides").reset_index())
-        fig = px.line(g, x="hour", y="rides", color="member_type",
-                      labels={"hour":"Hour of day", "rides":"Rides"})
+        g = (df_f.groupby(["member_type_display","hour"]).size().rename("rides").reset_index())
+        fig = px.line(g, x="hour", y="rides", color="member_type_display",
+                      labels={"hour":"Hour of day", "rides":"Rides", "member_type_display": MEMBER_LEGEND_TITLE})
         fig.update_layout(height=420)
         st.plotly_chart(fig, use_container_width=True)
 
         st.subheader("Weekday profile")
-        g2 = (df_f.groupby(["member_type","weekday"]).size().rename("rides").reset_index())
+        g2 = (df_f.groupby(["member_type_display","weekday"]).size().rename("rides").reset_index())
         g2["weekday_name"] = g2["weekday"].map({0:"Mon",1:"Tue",2:"Wed",3:"Thu",4:"Fri",5:"Sat",6:"Sun"})
-        fig2 = px.line(g2, x="weekday_name", y="rides", color="member_type",
-                       labels={"weekday_name":"Weekday","rides":"Rides"})
+        fig2 = px.line(g2, x="weekday_name", y="rides", color="member_type_display",
+                       labels={"weekday_name":"Weekday","rides":"Rides", "member_type_display": MEMBER_LEGEND_TITLE})
         fig2.update_layout(height=420)
         st.plotly_chart(fig2, use_container_width=True)
 
@@ -555,10 +574,10 @@ elif page == "Member vs Casual Profiles":
             if "season" not in df_f.columns:
                 st.caption("No `season` column.")
             else:
-                g3 = (df_f.groupby(["season","member_type","rideable_type"]).size().rename("rides").reset_index())
+                g3 = (df_f.groupby(["season","member_type_display","rideable_type"]).size().rename("rides").reset_index())
                 fig3 = px.bar(g3, x="season", y="rides", color="rideable_type", barmode="relative",
-                              facet_col="member_type", facet_col_wrap=2,
-                              labels={"rides":"Rides","season":"Season","rideable_type":"Bike type"})
+                              facet_col="member_type_display", facet_col_wrap=2,
+                              labels={"rides":"Rides","season":"Season","rideable_type":"Bike type", "member_type_display": MEMBER_LEGEND_TITLE})
                 fig3.update_layout(height=600)
                 st.plotly_chart(fig3, use_container_width=True)
 
