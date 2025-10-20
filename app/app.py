@@ -2789,39 +2789,186 @@ elif (
     st.caption("Tip: Use **Time slice**, **Normalize → Per day**, and **Min total traffic** to isolate AM vs PM redistribution cleanly.")
 
 
-elif page == "Pareto: Share of Rides":
+elif (
+    page == "Pareto: Share of Rides"
+    or page.startswith("📈 Pareto")
+):
     st.header("📈 Pareto curve — demand concentration")
-    if "start_station_name" not in df_f.columns:
-        st.warning("`start_station_name` not found in sample.")
-    else:
-        counts = (df_f.assign(n=1)
-                        .groupby("start_station_name")["n"].sum()
-                        .sort_values(ascending=False))
-        cum = (counts.cumsum() / counts.sum()).reset_index()
-        cum["rank"] = np.arange(1, len(cum) + 1)
 
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=cum["rank"], y=cum["n"], mode="lines", name="Cumulative share",
-                                 hovertemplate="Rank: %{x}<br>Cumulative share: %{y:.1%}<extra></extra>"))
-        fig.add_hline(y=0.80, line_dash="dot")
-        idx80 = int(np.searchsorted(cum["n"].values, 0.8))
-        if 0 < idx80 < len(cum):
-            fig.add_vline(x=cum.loc[idx80, "rank"], line_dash="dot")
-            fig.add_annotation(x=cum.loc[idx80, "rank"], y=0.82, showarrow=False,
-                               text=f"Top ~{int(cum.loc[idx80,'rank']):,} stations ≈ 80% of rides")
-        fig.update_layout(height=520)
-        friendly_axis(fig, x="Stations (ranked)", y="Cumulative share of rides", title="Demand concentration (Pareto)")
-        st.plotly_chart(fig, use_container_width=True)
-        st.markdown("**Action:** prioritize inventory and maintenance on the head of the curve; treat the tail as on-demand.")
+    if "start_station_name" not in df_f.columns and "end_station_name" not in df_f.columns:
+        st.warning("Need `start_station_name` or `end_station_name`.")
+        st.stop()
+
+    # ── Controls
+    c0, c1, c2, c3 = st.columns(4)
+    with c0:
+        basis = st.selectbox("Count rides by", ["Start stations", "End stations"], index=0)
+    with c1:
+        mode = st.selectbox("Time slice", ["All", "Weekday", "Weekend", "AM (06–11)", "PM (16–20)"], index=0)
+    with c2:
+        normalize = st.selectbox("Normalize counts", ["Total rides", "Per day (avg/station)"], index=0,
+                                 help="Per-day uses the `date` column if present.")
+    with c3:
+        target = st.slider("Target cumulative share", 50, 95, 80, 1)
+
+    c4, c5, c6 = st.columns(3)
+    with c4:
+        member_filter = st.selectbox("Member filter", ["All", "Member only", "Casual only"], index=0)
+    with c5:
+        min_rides = st.number_input("Min rides per station (pre-Pareto filter)", 0, 10000, 0, 10)
+    with c6:
+        show_lorenz = st.checkbox("Show Lorenz curve (cum. stations vs cum. rides)", value=False)
+
+    # ── Subset by time slice and member
+    subset = _time_slice(df_f, mode).copy()
+
+    # Ensure pretty member labels if you only have raw member_type
+    if "member_type_display" not in subset.columns and "member_type" in subset.columns:
+        _map = {"member": "Member 🧑‍💼", "casual": "Casual 🚲", "Member": "Member 🧑‍💼", "Casual": "Casual 🚲"}
+        subset["member_type_display"] = subset["member_type"].astype(str).map(_map).fillna(subset["member_type"].astype(str))
+
+    if member_filter != "All" and "member_type" in subset.columns:
+        if member_filter == "Member only":
+            subset = subset[subset["member_type"].astype(str) == "member"]
+        else:
+            subset = subset[subset["member_type"].astype(str) == "casual"]
+
+    if subset.empty:
+        st.info("No rides for current filters.")
+        st.stop()
+
+    # Pick column to count
+    station_col = "start_station_name" if basis.startswith("Start") else "end_station_name"
+    if station_col not in subset.columns:
+        st.warning(f"`{station_col}` not found.")
+        st.stop()
+
+    subset[station_col] = subset[station_col].astype(str)
+
+    # ── Build station totals
+    if normalize == "Per day (avg/station)" and "date" in subset.columns:
+        per_day = (
+            subset.groupby([station_col, "date"])
+            .size()
+            .rename("rides_day")
+            .reset_index()
+        )
+        totals = per_day.groupby(station_col)["rides_day"].mean().rename("rides")
+    else:
+        totals = subset.groupby(station_col).size().rename("rides")
+
+    # Filter tiny stations if requested
+    if min_rides > 0:
+        totals = totals[totals >= float(min_rides)]
+
+    if totals.empty:
+        st.info("No stations left after filtering. Lower **Min rides**.")
+        st.stop()
+
+    totals = totals.sort_values(ascending=False)
+    counts = totals.to_numpy(dtype=float)
+    n = len(counts)
+    cum_share = np.cumsum(counts) / counts.sum()
+
+    # Find rank to hit target %
+    target_frac = target / 100.0
+    idx_target = int(np.searchsorted(cum_share, target_frac, side="left"))
+    rank_needed = min(max(idx_target + 1, 1), n)  # 1-based
+
+    # Gini & HHI diagnostics
+    # Gini (0=equal, 1=concentrated)
+    x = np.sort(counts)  # ascending
+    cum_x = np.cumsum(x)
+    gini = 1 - (2 / (n - 1)) * (n - (cum_x.sum() / cum_x[-1]))
+    # HHI (0–1, higher = concentrated). Use shares^2
+    shares = counts / counts.sum()
+    hhi = float(np.sum(shares ** 2))
+
+    # ── Plot
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=np.arange(1, n + 1),
+        y=cum_share,
+        mode="lines",
+        name="Cumulative share",
+        hovertemplate="Rank: %{x}<br>Cumulative share: %{y:.1%}<extra></extra>",
+    ))
+    # Target lines
+    fig.add_hline(y=target_frac, line_dash="dot")
+    fig.add_vline(x=rank_needed, line_dash="dot")
+    fig.add_annotation(
+        x=rank_needed, y=min(target_frac + 0.025, 0.98),
+        showarrow=False,
+        text=f"Top ~{rank_needed:,} / {n:,} stations ≈ {target}%",
+        bgcolor="rgba(0,0,0,0.05)"
+    )
+
+    # Lorenz (optional): cumulative stations share on X, cumulative rides on Y
+    if show_lorenz:
+        x_lor = np.linspace(0, 1, n, endpoint=True)  # cum stations share
+        y_lor = np.cumsum(np.sort(shares))  # cum rides share ascending
+        fig.add_trace(go.Scatter(
+            x=x_lor * n,  # show same X scale as rank for easier reading
+            y=y_lor,
+            mode="lines",
+            name="Lorenz (asc by size)",
+            hovertemplate="Cum stations: %{x:.0f}<br>Cum rides: %{y:.1%}<extra></extra>",
+        ))
+        # Equality line (diagonal)
+        fig.add_trace(go.Scatter(
+            x=x_lor * n, y=x_lor,
+            mode="lines", name="Equality", line=dict(dash="dash"),
+            hoverinfo="skip",
+        ))
+
+    # Axes + layout
+    fig.update_layout(
+        height=520,
+        margin=dict(l=20, r=20, t=40, b=40),
+        title=f"Demand concentration (Pareto) — {basis.lower()}",
+    )
+    friendly_axis(
+        fig,
+        x="Stations (ranked by rides)",
+        y="Cumulative share of rides",
+        title=None
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ── Stats panel
+    cA, cB, cC, cD = st.columns(4)
+    with cA:
+        st.metric("Stations to reach target", f"{rank_needed:,} / {n:,}")
+    with cB:
+        st.metric("Top station share", f"{shares.max():.1%}")
+    with cC:
+        st.metric("Gini coefficient", f"{gini:.3f}")
+    with cD:
+        st.metric("HHI (0–1)", f"{hhi:.3f}")
+
+    # ── Download
+    out = totals.reset_index().rename(columns={station_col: "station", "rides": "value"})
+    out["rank"] = np.arange(1, len(out) + 1)
+    out["cum_share"] = cum_share
+    st.download_button(
+        "Download Pareto table (CSV)",
+        out.to_csv(index=False).encode("utf-8"),
+        f"pareto_{'start' if station_col=='start_station_name' else 'end'}_stations.csv",
+        "text/csv",
+    )
+
+    st.caption("Tip: if the curve is very steep, a small set of hubs carries most demand—prioritize rebalancing, maintenance, and inventory there.")
 
 elif page == "Weekday × Hour Heatmap":
     st.header("⏰ Temporal load — weekday × start hour")
 
-    if not {"started_at","hour","weekday"}.issubset(df_f.columns):
+    if not {"started_at", "hour", "weekday"}.issubset(df_f.columns):
         st.info("Need `started_at` parsed into `hour` and `weekday` (done in load_data).")
     else:
         # ---- Controls ----
-        c1, c2, c3, c4, c5 = st.columns(5)
+        c0, c1, c2, c3, c4, c5 = st.columns(6)
+        with c0:
+            mode = st.selectbox("Time slice", ["All", "Weekday", "Weekend", "AM (06–11)", "PM (16–20)"], index=0)
         with c1:
             scale = st.selectbox("Scale", ["Absolute", "Row %", "Column %", "Z-score"], index=0,
                                  help="Row % shows distribution within a weekday; Column % shows distribution within an hour.")
@@ -2834,12 +2981,14 @@ elif page == "Weekday × Hour Heatmap":
         with c5:
             member_mode = st.selectbox("Member view", ["All", "Member only", "Casual only", "Facet by Member Type"], index=0)
 
-        # Apply day-of-week preset quickly (this stacks on your sidebar filter)
-        subset = df_f.copy()
+        # Base subset using global time-slice helper
+        subset = _time_slice(df_f, mode).copy()
+
+        # Apply day-of-week preset (stacks on sidebar filter + mode)
         if wk_preset == "Weekdays only":
-            subset = subset[subset["weekday"].isin([0,1,2,3,4])]
+            subset = subset[subset["weekday"].isin([0, 1, 2, 3, 4])]
         elif wk_preset == "Weekend only":
-            subset = subset[subset["weekday"].isin([5,6])]
+            subset = subset[subset["weekday"].isin([5, 6])]
 
         # Member filter / facet
         facet = False
@@ -2872,8 +3021,8 @@ elif page == "Weekday × Hour Heatmap":
             fig = px.imshow(
                 mat_display,
                 aspect="auto", origin="lower",
-                labels=dict(x="Hour of day", y="Day of week", color=("Value" if scale=="Absolute" else scale)),
-                text_auto=False, color_continuous_scale="Turbo" if scale=="Z-score" else "Viridis"
+                labels=dict(x="Hour of day", y="Day of week", color=("Value" if scale == "Absolute" else scale)),
+                text_auto=False, color_continuous_scale="Turbo" if scale == "Z-score" else "Viridis"
             )
 
             # Ticks: show real hour values (bin centers)
@@ -2891,12 +3040,12 @@ elif page == "Weekday × Hour Heatmap":
 
             # Hover with raw value and (if % scale) show formatted %
             hover = "<b>%{y}</b> @ <b>%{x}</b><br>Value: %{z}"
-            if scale in ("Row %","Column %"):
+            if scale in ("Row %", "Column %"):
                 hover = "<b>%{y}</b> @ <b>%{x}</b><br>Share: %{z:.1f}%"
             fig.update_traces(hovertemplate=hover)
 
-            # Peak annotation (only for Absolute / Row % to avoid odd Z-peak)
-            if scale in ("Absolute","Row %"):
+            # Peak annotation (only for Absolute / Row %)
+            if scale in ("Absolute", "Row %"):
                 fig = _add_peak_annotation(fig, mat)
 
             st.plotly_chart(fig, use_container_width=True)
@@ -2913,21 +3062,21 @@ elif page == "Weekday × Hour Heatmap":
             mat = _make_heat_grid(subset, hour_bin=hour_bin, scale=scale)
             _render_heat(mat, "Weekday × Hour — All riders")
 
-        # ---- Marginal profiles (always useful) ----
+        # ---- Marginal profiles ----
         st.subheader("Marginal profiles")
         grid_all = _make_heat_grid(subset, hour_bin=hour_bin, scale="Absolute")
         if not grid_all.empty:
             # Hourly profile
-            hourly = grid_all.sum(axis=0).rename("rides").reset_index().rename(columns={"index":"hour"})
+            hourly = grid_all.sum(axis=0).rename("rides").reset_index().rename(columns={"index": "hour"})
             hourly["hour"] = hourly["hour"].astype(int)
-            f1 = px.line(hourly, x="hour", y="rides", markers=True, labels={"hour":"Hour of day","rides":"Rides"})
+            f1 = px.line(hourly, x="hour", y="rides", markers=True, labels={"hour": "Hour of day", "rides": "Rides"})
             f1.update_layout(height=300, title="Hourly total rides")
             st.plotly_chart(f1, use_container_width=True)
 
             # Weekday profile
-            weekday = grid_all.sum(axis=1).rename("rides").reset_index().rename(columns={0:"weekday"})
+            weekday = grid_all.sum(axis=1).rename("rides").reset_index().rename(columns={0: "weekday"})
             weekday["weekday_name"] = _weekday_name(weekday["weekday"])
-            f2 = px.bar(weekday, x="weekday_name", y="rides", labels={"weekday_name":"Weekday","rides":"Rides"})
+            f2 = px.bar(weekday, x="weekday_name", y="rides", labels={"weekday_name": "Weekday", "rides": "Rides"})
             f2.update_layout(height=300, title="Weekday total rides")
             st.plotly_chart(f2, use_container_width=True)
 
@@ -2942,7 +3091,8 @@ elif page == "Weekday × Hour Heatmap":
             with cA: _render_heat(mat_dry, "Dry days")
             with cB: _render_heat(mat_wet, "Wet days")
 
-        st.caption("Tips: try Row % to see *within-day* timing; Column % to see which days dominate each hour; Z-score to highlight anomalies.")
+        st.caption("Tips: try Row % to see within-day timing; Column % to see which days dominate each hour; Z-score to highlight anomalies.")
+
 
 elif page == "Recommendations":
     st.header("🚀 Conclusion & Recommendations")
