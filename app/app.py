@@ -1347,7 +1347,8 @@ elif page == "OD Flows (Sankey) & Matrix":
                 geo["width"] = (w_scale * (np.sqrt(edges[value_col]) / np.sqrt(maxv if maxv > 0 else 1.0))).clip(lower=0.5)
                 # Color by direction (blue) or member split if available
                 if member_split and "member_type_display" in geo.columns:
-                    geo["color"] = geo["member_type_display"]
+                    geo["color"] = (
+                    geo["member_type_display"]
                     .astype("object")
                     .map({
                         "Member 🧑‍💼": [34,197,94,200],
