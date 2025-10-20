@@ -83,34 +83,6 @@ def show_cover(cover_path: Path):
         st.image(str(cover_path), use_column_width=True,
                  caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com")
 
-# ---- Ensure trip-level weather columns are present by backfilling from daily ----
-def _backfill_trip_weather(df_trips: pd.DataFrame, daily_df: pd.DataFrame) -> pd.DataFrame:
-    if daily_df is None or daily_df.empty or "date" not in df_trips.columns:
-        return df_trips
-
-    # Make a safe copy
-    out = df_trips.copy()
-
-    # Build daily lookups (only if present)
-    lookups = {}
-    for col in ["avg_temp_c", "wind_kph", "gust_kph", "precip_mm", "wet_day", "precip_bin", "wind_bin"]:
-        if col in daily_df.columns:
-            lookups[col] = daily_df.set_index("date")[col]
-
-    # Backfill each weather column from daily onto trips by date
-    for col, mapper in lookups.items():
-        if col not in out.columns or out[col].notna().sum() == 0:
-            # create column if missing
-            if col not in out.columns:
-                out[col] = np.nan
-            # map by date; ensure datetime alignment
-            out[col] = out[col].where(out[col].notna(), out["date"].map(mapper))
-
-    return out
-
-# Apply the backfill once for the page
-df_f = _backfill_trip_weather(df_f, daily_all)
-
 # UI helpers (Intro hero + KPI cards)
 def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
     st.markdown(
@@ -439,6 +411,34 @@ df_f = apply_filters(
 
 daily_all = ensure_daily(df)
 daily_f   = ensure_daily(df_f)
+
+# ---- backfill trip-level weather from daily ----
+def _backfill_trip_weather(df_trips: pd.DataFrame, daily_df: pd.DataFrame) -> pd.DataFrame:
+    if daily_df is None or daily_df.empty or "date" not in df_trips.columns:
+        return df_trips
+
+    out = df_trips.copy()
+
+    # build daily lookups only for columns that exist
+    lookups = {}
+    for col in ["avg_temp_c", "wind_kph", "gust_kph", "precip_mm", "wet_day", "precip_bin", "wind_bin"]:
+        if col in daily_df.columns:
+            lookups[col] = daily_df.set_index("date")[col]
+
+    # ensure both are datetime (day-level) for mapping
+    out["date"] = pd.to_datetime(out["date"], errors="coerce")
+    # daily_df['date'] is already datetime from ensure_daily()
+
+    for col, mapper in lookups.items():
+        if col not in out.columns or out[col].notna().sum() == 0:
+            if col not in out.columns:
+                out[col] = np.nan
+            out[col] = out[col].where(out[col].notna(), out["date"].map(mapper))
+
+    return out
+
+# apply backfill once
+df_f = _backfill_trip_weather(df_f, daily_all)
 
 # ────────────────────────────── Pages ──────────────────────────────────────
 if page == "Intro":
