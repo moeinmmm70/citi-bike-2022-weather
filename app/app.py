@@ -901,9 +901,11 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
 
 elif page == "Member vs Casual Profiles":
     st.header("👥 Member vs Casual riding patterns")
+
     if "member_type_display" not in df_f.columns or "hour" not in df_f.columns:
         st.info("Need `member_type` and `started_at` (engineered hour).")
     else:
+        # ——— Base behavioural profiles ———
         st.subheader("Hourly profile")
         g = (df_f.groupby(["member_type_display","hour"]).size().rename("rides").reset_index())
         fig = px.line(
@@ -923,6 +925,116 @@ elif page == "Member vs Casual Profiles":
         fig2.update_layout(height=420)
         st.plotly_chart(fig2, use_container_width=True)
 
+        # ——— Weather-aware mix: Rain ———
+        st.subheader("Weather mix by user type — rain")
+        has_precip_bin = ("precip_bin" in df_f.columns) and df_f["precip_bin"].notna().any()
+        has_wet_flag   = ("wet_day" in df_f.columns)
+
+        cwx1, cwx2 = st.columns(2)
+
+        with cwx1:
+            if has_precip_bin:
+                g3 = (df_f.dropna(subset=["precip_bin"])
+                          .groupby(["member_type_display","precip_bin"])
+                          .size().rename("rides").reset_index())
+                g3["precip_bin"] = pd.Categorical(g3["precip_bin"], ["Low","Medium","High"], ordered=True)
+                fig3 = px.bar(
+                    g3, x="precip_bin", y="rides", color="member_type_display", barmode="group",
+                    labels={"precip_bin":"Precipitation", "rides":"Rides", "member_type_display": MEMBER_LEGEND_TITLE}
+                )
+                fig3.update_layout(height=420, title="Ride volume by precipitation bin")
+                st.plotly_chart(fig3, use_container_width=True)
+            elif has_wet_flag:
+                g3b = (df_f.assign(day_type=lambda x: x["wet_day"].map({0:"Dry",1:"Wet"}))
+                            .groupby(["member_type_display","day_type"])
+                            .size().rename("rides").reset_index())
+                fig3b = px.bar(
+                    g3b, x="day_type", y="rides", color="member_type_display", barmode="group",
+                    labels={"day_type":"Day type", "rides":"Rides", "member_type_display": MEMBER_LEGEND_TITLE}
+                )
+                fig3b.update_layout(height=420, title="Ride volume: Wet vs Dry")
+                st.plotly_chart(fig3b, use_container_width=True)
+            else:
+                st.info("No rain columns (`precip_bin` or `wet_day`) available.")
+
+        # ——— Temperature distribution by user type ———
+        with cwx2:
+            if "avg_temp_c" in df_f.columns and df_f["avg_temp_c"].notna().any():
+                vdat = df_f.dropna(subset=["avg_temp_c"])
+                figv = px.violin(
+                    vdat, x="member_type_display", y="avg_temp_c", box=True, points=False,
+                    labels={"member_type_display": MEMBER_LEGEND_TITLE, "avg_temp_c":"Avg temp during rides (°C)"}
+                )
+                figv.update_layout(height=420, title="Where each group rides by temperature")
+                st.plotly_chart(figv, use_container_width=True)
+            else:
+                st.info("Temperature not available to plot distributions.")
+
+        # ——— Wind effect ———
+        st.subheader("Wind effect by user type")
+        if "wind_bin" in df_f.columns and df_f["wind_bin"].notna().any():
+            g4 = (df_f.dropna(subset=["wind_bin"])
+                      .groupby(["member_type_display","wind_bin"])
+                      .size().rename("rides").reset_index())
+            # keep a sensible order if present
+            order_wind = ["Calm","Breeze","Windy","Very Windy"]
+            present = [x for x in order_wind if x in g4["wind_bin"].unique().tolist()]
+            if present:
+                g4["wind_bin"] = pd.Categorical(g4["wind_bin"], present, ordered=True)
+            fig4 = px.bar(
+                g4, x="wind_bin", y="rides", color="member_type_display", barmode="group",
+                labels={"wind_bin":"Wind", "rides":"Rides", "member_type_display": MEMBER_LEGEND_TITLE}
+            )
+            fig4.update_layout(height=420)
+            st.plotly_chart(fig4, use_container_width=True)
+        elif "wind_kph" in df_f.columns and df_f["wind_kph"].notna().any():
+            # fallback: bin wind_kph
+            bins = [-1, 10, 20, 30, 200]
+            labels_w = ["<10","10–20","20–30","30+"]
+            g4b = (df_f.assign(wind_bin=lambda x: pd.cut(x["wind_kph"], bins, labels=labels_w, include_lowest=True))
+                        .groupby(["member_type_display","wind_bin"])
+                        .size().rename("rides").reset_index())
+            fig4b = px.bar(
+                g4b, x="wind_bin", y="rides", color="member_type_display", barmode="group",
+                labels={"wind_bin":"Wind (kph)", "rides":"Rides", "member_type_display": MEMBER_LEGEND_TITLE}
+            )
+            fig4b.update_layout(height=420)
+            st.plotly_chart(fig4b, use_container_width=True)
+        else:
+            st.info("No wind columns available.")
+
+        # ——— Performance vs temperature (median speed & duration by temp band) ———
+        st.subheader("Performance vs temperature")
+        if {"avg_temp_c","speed_kmh","duration_min"}.issubset(df_f.columns) and df_f["avg_temp_c"].notna().any():
+            # Bin temperature (you can tweak bands)
+            tbins = [-20,-5,0,5,10,15,20,25,30,35,50]
+            tlabs = ["<-5","-5–0","0–5","5–10","10–15","15–20","20–25","25–30","30–35",">35"]
+            dat = df_f.dropna(subset=["avg_temp_c"]).copy()
+            dat["temp_band"] = pd.cut(dat["avg_temp_c"], tbins, labels=tlabs, include_lowest=True)
+
+            # Median speed by band & user type
+            gs = (dat.groupby(["member_type_display","temp_band"])["speed_kmh"]
+                      .median().reset_index().dropna(subset=["temp_band"]))
+            figS = px.line(
+                gs, x="temp_band", y="speed_kmh", color="member_type_display", markers=True,
+                labels={"temp_band":"Temperature band (°C)", "speed_kmh":"Median speed (km/h)", "member_type_display": MEMBER_LEGEND_TITLE}
+            )
+            figS.update_layout(height=420)
+            st.plotly_chart(figS, use_container_width=True)
+
+            # Median duration by band & user type
+            gd = (dat.groupby(["member_type_display","temp_band"])["duration_min"]
+                      .median().reset_index().dropna(subset=["temp_band"]))
+            figD = px.line(
+                gd, x="temp_band", y="duration_min", color="member_type_display", markers=True,
+                labels={"temp_band":"Temperature band (°C)", "duration_min":"Median duration (min)", "member_type_display": MEMBER_LEGEND_TITLE}
+            )
+            figD.update_layout(height=420)
+            st.plotly_chart(figD, use_container_width=True)
+        else:
+            st.info("Need avg_temp_c, duration_min, and speed_kmh to chart performance vs temperature.")
+
+        # ——— Optional: bike type mix by season (kept from earlier) ———
         if "rideable_type" in df_f.columns and "season" in df_f.columns:
             st.subheader("Rideable type mix by season")
             g3 = (df_f.groupby(["season","member_type_display","rideable_type"]).size().rename("rides").reset_index())
