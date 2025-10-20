@@ -2580,10 +2580,10 @@ elif (
 
     need = {"start_station_name", "end_station_name"}
     if not need.issubset(df_f.columns):
-        st.info("Need `start_station_name` and `end_station_name`.")
+        st.info("Need start/end station names.")
         st.stop()
 
-    # Pretty member labels if only raw exists
+    # Pretty member labels if only raw exists (optional; safe no-op if missing)
     mt_col = None
     if "member_type_display" in df_f.columns:
         mt_col = "member_type_display"
@@ -2597,7 +2597,8 @@ elif (
     with c1:
         mode = st.selectbox("Time slice", ["All", "Weekday", "Weekend", "AM (06–11)", "PM (16–20)"], index=0)
     with c2:
-        member_split = st.checkbox("Split by member type", value=(mt_col is not None))
+        normalize = st.selectbox("Normalize", ["None", "Per day (avg in/out)"], index=0,
+                                 help="Per-day uses the `date` column if present.")
     with c3:
         topK = st.slider("Show top ±K stations", 5, 60, 15, 5)
     with c4:
@@ -2605,8 +2606,7 @@ elif (
 
     c5, c6 = st.columns(2)
     with c5:
-        normalize = st.selectbox("Normalize imbalance", ["None", "Per day (avg in/out)"], index=0,
-                                 help="Use per-day averages if you have a `date` column.")
+        member_split = st.checkbox("Split by member type", value=(mt_col is not None))
     with c6:
         show_map = st.checkbox("Show map", value={"start_lat", "start_lng"}.issubset(df_f.columns) or {"end_lat", "end_lng"}.issubset(df_f.columns))
 
@@ -2616,124 +2616,92 @@ elif (
         st.info("No rides in this time slice.")
         st.stop()
 
-    # Ensure strings
+    # Ensure strings (avoid categorical weirdness)
     subset["start_station_name"] = subset["start_station_name"].astype(str)
     subset["end_station_name"] = subset["end_station_name"].astype(str)
 
-    # ── Builder
-    def build_imbalance(df_src: pd.DataFrame, seg: str | None = None) -> pd.DataFrame:
-        group_keys_dep = ["start_station_name"]
-        group_keys_arr = ["end_station_name"]
-        if seg:
-            group_keys_dep.append(seg)
-            group_keys_arr.append(seg)
-
+    # ── Core builder
+    def build_imbalance(df_src: pd.DataFrame) -> pd.DataFrame:
         if normalize == "Per day (avg in/out)" and "date" in df_src.columns:
             dep = (
-                df_src.groupby(group_keys_dep + ["date"]).size().rename("cnt").reset_index()
-                      .groupby(group_keys_dep)["cnt"].mean().rename("out")
-                      .reset_index()
+                df_src.groupby(["start_station_name", "date"]).size().rename("cnt").reset_index()
+                     .groupby("start_station_name")["cnt"].mean().rename("out").reset_index()
             )
             arr = (
-                df_src.groupby(group_keys_arr + ["date"]).size().rename("cnt").reset_index()
-                      .groupby(group_keys_arr)["cnt"].mean().rename("in")
-                      .reset_index()
+                df_src.groupby(["end_station_name", "date"]).size().rename("cnt").reset_index()
+                     .groupby("end_station_name")["cnt"].mean().rename("in").reset_index()
             )
+            to_float = True
         else:
-            dep = df_src.groupby(group_keys_dep).size().rename("out").reset_index()
-            arr = df_src.groupby(group_keys_arr).size().rename("in").reset_index()
+            dep = df_src.groupby("start_station_name").size().rename("out").reset_index()
+            arr = df_src.groupby("end_station_name").size().rename("in").reset_index()
+            to_float = False
 
-        # Merge arrivals & departures on station (+ segment if split)
-        m = dep.merge(
-            arr,
-            left_on=group_keys_dep,
-            right_on=group_keys_arr,
-            how="outer",
-            suffixes=("_dep", "_arr"),
-        )
+        s = dep.merge(arr, left_on="start_station_name", right_on="end_station_name", how="outer")
+        s["station"] = s["start_station_name"].fillna(s["end_station_name"])
+        s = s.drop(columns=["start_station_name", "end_station_name"])
 
-        # Consolidate station name
-        m["station"] = m.get("start_station_name", pd.Series(dtype=object)).fillna(m.get("end_station_name", pd.Series(dtype=object)))
-        # Keep segment column if split
-        if seg and seg in m.columns:
-            m[seg] = m[seg].astype(str)
+        if to_float:
+            s["in"] = s["in"].fillna(0.0).astype(float)
+            s["out"] = s["out"].fillna(0.0).astype(float)
+        else:
+            s["in"] = s["in"].fillna(0).astype(int)
+            s["out"] = s["out"].fillna(0).astype(int)
 
-        # Clean
-        m["in"] = m["in"].fillna(0.0 if normalize.startswith("Per day") else 0).astype(float if normalize.startswith("Per day") else int)
-        m["out"] = m["out"].fillna(0.0 if normalize.startswith("Per day") else 0).astype(float if normalize.startswith("Per day") else int)
-        m["total"] = m["in"] + m["out"]
-        m = m.drop(columns=[c for c in ["start_station_name", "end_station_name"] if c in m.columns])
-
-        # Filter low-traffic stations
+        s["total"] = s["in"] + s["out"]
         if min_total > 0:
-            m = m[m["total"] >= float(min_total)]
+            s = s[s["total"] >= (float(min_total) if to_float else int(min_total))]
 
-        # Imbalance
-        m["imbalance"] = m["in"] - m["out"]
-        return m.sort_values("imbalance", ascending=False).reset_index(drop=True)
+        s["imbalance"] = s["in"] - s["out"]
+        return s.sort_values("imbalance", ascending=False).reset_index(drop=True)
 
-    # ── Render helpers
-    def render_bar(df_in: pd.DataFrame, title_suffix: str = ""):
+    # ── Plot helper
+    def render_bar(df_in: pd.DataFrame, suffix: str = ""):
         if df_in.empty:
             st.info("Nothing to show with current filters. Lower **Min total traffic** or change the time slice.")
-            return
+            return None
+
         top_pos = df_in.nlargest(int(topK), "imbalance")
         top_neg = df_in.nsmallest(int(topK), "imbalance")
         biggest = pd.concat([top_pos, top_neg], ignore_index=True)
 
-        # Labels trimmed for readability
         biggest["label"] = biggest["station"].astype(str).str.slice(0, 28)
-
-        # Horizontal bar: color green(+) / red(−)
         colors = np.where(biggest["imbalance"] >= 0, "rgba(34,197,94,0.85)", "rgba(220,38,38,0.85)")
+
         fig = go.Figure(go.Bar(
-            x=biggest["imbalance"],
-            y=biggest["label"],
-            orientation="h",
+            x=biggest["label"],
+            y=biggest["imbalance"],
             marker=dict(color=colors),
-            hovertemplate="Station: %{y}<br>IN: %{customdata[0]}<br>OUT: %{customdata[1]}<br>Δ: %{x}<extra></extra>",
+            hovertemplate="Station: %{x}<br>IN: %{customdata[0]}<br>OUT: %{customdata[1]}<br>Δ: %{y}<extra></extra>",
             customdata=np.stack([biggest["in"], biggest["out"]], axis=1),
         ))
-        y_title = ""
-        x_title = "Avg Δ (in − out) / day" if normalize.startswith("Per day") else "Δ (in − out)"
+        x_title = ""
+        y_title = "Avg Δ (in − out) / day" if normalize.startswith("Per day") else "Δ (in − out)"
         fig.update_layout(
             height=560,
-            title=f"Largest net IN (green) / OUT (red) {title_suffix}".strip(),
+            title=f"Stations with largest net IN (green) / OUT (red) {suffix}".strip(),
             xaxis_title=x_title,
             yaxis_title=y_title,
             margin=dict(l=10, r=10, t=50, b=10),
         )
+        fig.update_xaxes(tickangle=45, tickfont=dict(size=10))
         st.plotly_chart(fig, use_container_width=True)
         return biggest
 
-    def render_map(df_in: pd.DataFrame, title_suffix: str = ""):
-        if not show_map:
-            return
-        # Build coordinates from starts and ends (use medians; fallback if one side missing)
-        latlon_cols_start = {"start_lat": "lat_s", "start_lng": "lon_s"}
-        latlon_cols_end   = {"end_lat": "lat_e", "end_lng": "lon_e"}
-
-        coords_s = None
-        coords_e = None
-        if {"start_lat", "start_lng"}.issubset(df_f.columns):
-            coords_s = (
-                df_f.groupby("start_station_name")[["start_lat", "start_lng"]]
-                .median().rename(columns={"start_lat": "lat", "start_lng": "lon"})
-            )
-        if {"end_lat", "end_lng"}.issubset(df_f.columns):
-            coords_e = (
-                df_f.groupby("end_station_name")[["end_lat", "end_lng"]]
-                .median().rename(columns={"end_lat": "lat", "end_lng": "lon"})
-            )
-
-        if coords_s is None and coords_e is None:
-            st.caption("Map hidden (no station coordinates available).")
+    # ── Map helper (uses coords from starts and/or ends)
+    def render_map(df_in: pd.DataFrame, suffix: str = ""):
+        if not show_map or df_in is None or df_in.empty:
             return
 
+        # Build station coords
         coords = pd.DataFrame(index=pd.Index(df_in["station"].unique(), name="station"))
-        if coords_s is not None:
-            coords = coords.join(coords_s.rename_axis("station"), how="left", rsuffix="_s")
-        if coords_e is not None:
+        if {"start_lat", "start_lng"}.issubset(df_f.columns):
+            coords_s = df_f.groupby("start_station_name")[["start_lat", "start_lng"]].median()
+            coords_s.columns = ["lat", "lon"]
+            coords = coords.join(coords_s.rename_axis("station"), how="left")
+        if {"end_lat", "end_lng"}.issubset(df_f.columns):
+            coords_e = df_f.groupby("end_station_name")[["end_lat", "end_lng"]].median()
+            coords_e.columns = ["lat", "lon"]
             coords = coords.combine_first(coords_e.rename_axis("station"))
 
         geo = df_in.set_index("station").join(coords, how="left").reset_index()
@@ -2744,18 +2712,12 @@ elif (
 
         import pydeck as pdk
 
-        st.subheader("🗺️ Map — stations sized by |Δ| and colored by sign" + (f" {title_suffix}" if title_suffix else ""))
-
         vmax = float(np.abs(geo["imbalance"]).max())
         scale = st.slider("Map bubble scale", 10, 60, 18)
-        # Radius ∝ sqrt(|Δ|) for readability, scaled to meters
         geo["radius"] = (60 + scale * (np.sqrt(np.abs(geo["imbalance"])) / np.sqrt(vmax if vmax > 0 else 1)) * 120).astype(float)
-        # Color as list-of-lists (categorical-safe)
-        geo["color"] = [
-            [34, 197, 94, 210] if v >= 0 else [220, 38, 38, 210]
-            for v in geo["imbalance"].to_numpy()
-        ]
-        # Tooltip-safe name
+        geo["color"] = [[34, 197, 94, 210] if v >= 0 else [220, 38, 38, 210] for v in geo["imbalance"].to_numpy()]
+
+        # ASCII-safe names for tooltip
         def ascii_safe(s: pd.Series) -> pd.Series:
             return s.astype(str).str.normalize("NFKD").str.encode("ascii", errors="ignore").str.decode("ascii")
         geo["name_s"] = ascii_safe(geo["station"])
@@ -2765,9 +2727,11 @@ elif (
             "style": {"backgroundColor": "rgba(17,17,17,0.85)", "color": "white"},
         }
 
-        center_lat = float(geo["lat"].median())
-        center_lon = float(geo["lon"].median())
-        view_state = pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=11, pitch=0, bearing=0)
+        view_state = pdk.ViewState(
+            latitude=float(geo["lat"].median()),
+            longitude=float(geo["lon"].median()),
+            zoom=11, pitch=0, bearing=0
+        )
 
         layer = pdk.Layer(
             "ScatterplotLayer",
@@ -2784,9 +2748,10 @@ elif (
             map_style="mapbox://styles/mapbox/dark-v11",
             tooltip=tooltip,
         )
+        st.subheader("🗺️ Map — stations sized by |Δ| and colored by sign" + (f" {suffix}" if suffix else ""))
         st.pydeck_chart(deck)
 
-    # ── Render (split or combined)
+    # ── Render (split or not)
     if member_split and (mt_col is not None) and (mt_col in subset.columns):
         tabs = st.tabs(["Member 🧑‍💼", "Casual 🚲", "All"])
         segments = [
@@ -2796,7 +2761,7 @@ elif (
         ]
         for (label, seg_df), tab in zip(segments, tabs):
             with tab:
-                m = build_imbalance(seg_df, seg=None)  # per segment already filtered
+                m = build_imbalance(seg_df)
                 biggest = render_bar(m, f"— {label}")
                 with st.expander("Preview & Download — " + label):
                     st.dataframe(m.sort_values("imbalance", ascending=False).head(120), use_container_width=True)
@@ -2807,10 +2772,9 @@ elif (
                         "text/csv",
                         key=f"dl_imb_{label}",
                     )
-                if biggest is not None and not biggest.empty:
-                    render_map(biggest, f"— {label}")
+                render_map(biggest, f"— {label}")
     else:
-        m = build_imbalance(subset, seg=None)
+        m = build_imbalance(subset)
         biggest = render_bar(m)
         with st.expander("Preview & Download"):
             st.dataframe(m.sort_values("imbalance", ascending=False).head(120), use_container_width=True)
@@ -2820,10 +2784,9 @@ elif (
                 "station_imbalance.csv",
                 "text/csv",
             )
-        if biggest is not None and not biggest.empty:
-            render_map(biggest)
+        render_map(biggest)
 
-    st.caption("Tip: Use **Time slice** and **Min total traffic** to focus on AM/PM redistribution or quiet hours.")
+    st.caption("Tip: Use **Time slice**, **Normalize → Per day**, and **Min total traffic** to isolate AM vs PM redistribution cleanly.")
 
 
 elif page == "Pareto: Share of Rides":
