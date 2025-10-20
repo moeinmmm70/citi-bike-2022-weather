@@ -1611,7 +1611,7 @@ elif page == "Member vs Casual Profiles":
         speed_med=("speed_kmh", _safe_median) if "speed_kmh" in df_mc.columns else ("member_type_clean", "size"),
     )
 
-    # Rain penalty
+    # Rain penalty (wet vs dry) by group
     rain_penalty = None
     if "wet_day" in df_mc.columns:
         dry = df_mc.loc[df_mc["wet_day"] == 0].groupby("member_type_clean").size()
@@ -1619,109 +1619,130 @@ elif page == "Member vs Casual Profiles":
         rain_penalty = (wet / dry - 1.0) * 100.0
         rain_penalty = rain_penalty.replace([np.inf, -np.inf], np.nan)
 
-    # Temperature preference gap
+    # Temperature preference gap (Casual − Member)
     temp_gap = None
     if "avg_temp_c" in df_mc.columns:
         temp_meds = df_mc.groupby("member_type_clean")["avg_temp_c"].median()
         if {"Member", "Casual"}.issubset(set(temp_meds.index)):
             temp_gap = float(temp_meds["Casual"] - temp_meds["Member"])
 
-    # ─────────── At-a-glance strip ───────────
+    # ─────────── At-a-glance (dark, uniform cards) ───────────
     st.markdown("#### ✨ At-a-glance (selection)")
 
-    # KPI card style
     st.markdown("""
     <style>
+    /* container fixes so columns stay even height */
+    .kpi-row { display: flex; gap: 16px; }
+    .kpi-col { flex: 1 1 0; }
+
     .kpi-box {
-        background-color: #f8f9fa;
-        border: 1px solid #ddd;
-        border-radius: 12px;
-        padding: 0.8rem 0.6rem 0.3rem 0.6rem;
-        text-align: center;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-        transition: all 0.2s ease;
+        background: rgba(255,255,255,0.06); /* dark translucent card */
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 16px;
+        padding: 12px 14px;
+        min-height: 132px;  /* uniform height */
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+        transition: transform .15s ease, box-shadow .15s ease;
     }
     .kpi-box:hover {
-        transform: scale(1.03);
-        box-shadow: 0 2px 5px rgba(0,0,0,0.12);
+        transform: translateY(-1px);
+        box-shadow: 0 6px 16px rgba(0,0,0,0.35);
     }
-    .kpi-box h3 {
-        font-size: 1.25rem;
-        font-weight: 600;
-        margin-bottom: 0.25rem;
+    .kpi-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #e5e7eb; /* light text */
+        font-weight: 700;
+        font-size: 1.00rem; /* smaller so it fits */
+        letter-spacing: .2px;
+        opacity: 0.95;
     }
-    .kpi-box small {
-        font-size: 0.78rem;
-        color: #555;
+    .kpi-emoji { font-size: 1.05rem; line-height: 1; }
+    .kpi-value {
+        color: #f3f4f6;
+        font-weight: 800;
+        font-size: 1.06rem; /* smaller than before for fit */
+        margin: 2px 0 0 0;
+        line-height: 1.1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .kpi-sub {
+        color: #cbd5e1;
+        font-size: 0.82rem;  /* smaller subcopy */
+        line-height: 1.25;
+        margin-top: 4px;
     }
     </style>
     """, unsafe_allow_html=True)
 
-    ca, cb, cc, cd, ce = st.columns(5)
+    # Compute values
     m = grp.set_index("member_type_clean")
+    total_member = int(m.loc["Member", "rides"]) if "Member" in m.index else 0
+    total_casual = int(m.loc["Casual", "rides"]) if "Casual" in m.index else 0
+    share_member = 100.0 * total_member / max(total_member + total_casual, 1)
 
+    d_med_m = m.at["Member", "duration_med"] if ("Member" in m.index and "duration_med" in m.columns) else np.nan
+    d_med_c = m.at["Casual", "duration_med"] if ("Casual" in m.index and "duration_med" in m.columns) else np.nan
+    dur_txt = f"{d_med_m:.1f} vs {d_med_c:.1f} min" if np.isfinite(d_med_m) and np.isfinite(d_med_c) else "—"
+
+    s_med_m = m.at["Member", "speed_med"] if ("Member" in m.index and "speed_med" in m.columns) else np.nan
+    s_med_c = m.at["Casual", "speed_med"] if ("Casual" in m.index and "speed_med" in m.columns) else np.nan
+    spd_txt = f"{s_med_m:.1f} vs {s_med_c:.1f} km/h" if np.isfinite(s_med_m) and np.isfinite(s_med_c) else "—"
+
+    rain_txt = "—"
+    if rain_penalty is not None and {"Member", "Casual"}.issubset(rain_penalty.index):
+        rain_txt = f"M {rain_penalty['Member']:+.0f}% · C {rain_penalty['Casual']:+.0f}%"
+
+    temp_txt = f"{temp_gap:+.1f}°C" if (temp_gap is not None and np.isfinite(temp_gap)) else "—"
+
+    # Render evenly-sized boxes (5 columns)
+    ca, cb, cc, cd, ce = st.columns(5)
     with ca:
-        total_member = int(m.loc["Member", "rides"]) if "Member" in m.index else 0
-        total_casual = int(m.loc["Casual", "rides"]) if "Casual" in m.index else 0
-        share_member = 100.0 * total_member / max(total_member + total_casual, 1)
-        html = f"""
+        st.markdown(f"""
         <div class="kpi-box">
-            <h3>🧑‍💼 {share_member:.1f}%</h3>
-            <small>Member share of total rides</small>
+            <div class="kpi-head"><span class="kpi-emoji">🧑‍💼</span>Member share</div>
+            <div class="kpi-value">{share_member:.1f}%</div>
+            <div class="kpi-sub">of total rides</div>
         </div>
-        """
-        st.markdown(html, unsafe_allow_html=True)
-
+        """, unsafe_allow_html=True)
     with cb:
-        d_med_m = m.at["Member", "duration_med"] if ("Member" in m.index and "duration_med" in m.columns) else np.nan
-        d_med_c = m.at["Casual", "duration_med"] if ("Casual" in m.index and "duration_med" in m.columns) else np.nan
-        txt = f"{d_med_m:.1f} vs {d_med_c:.1f} min" if np.isfinite(d_med_m) and np.isfinite(d_med_c) else "—"
-        html = f"""
+        st.markdown(f"""
         <div class="kpi-box">
-            <h3>⏱️ {txt}</h3>
-            <small>Median duration (M vs C)</small>
+            <div class="kpi-head"><span class="kpi-emoji">⏱️</span>Median duration</div>
+            <div class="kpi-value">{dur_txt}</div>
+            <div class="kpi-sub">Member (M) vs Casual (C)</div>
         </div>
-        """
-        st.markdown(html, unsafe_allow_html=True)
-
+        """, unsafe_allow_html=True)
     with cc:
-        s_med_m = m.at["Member", "speed_med"] if ("Member" in m.index and "speed_med" in m.columns) else np.nan
-        s_med_c = m.at["Casual", "speed_med"] if ("Casual" in m.index and "speed_med" in m.columns) else np.nan
-        txt = f"{s_med_m:.1f} vs {s_med_c:.1f} km/h" if np.isfinite(s_med_m) and np.isfinite(s_med_c) else "—"
-        html = f"""
+        st.markdown(f"""
         <div class="kpi-box">
-            <h3>🚴 {txt}</h3>
-            <small>Median speed (M vs C)</small>
+            <div class="kpi-head"><span class="kpi-emoji">🚴</span>Median speed</div>
+            <div class="kpi-value">{spd_txt}</div>
+            <div class="kpi-sub">Member (M) vs Casual (C)</div>
         </div>
-        """
-        st.markdown(html, unsafe_allow_html=True)
-
+        """, unsafe_allow_html=True)
     with cd:
-        if rain_penalty is not None and {"Member", "Casual"}.issubset(rain_penalty.index):
-            val = f"M {rain_penalty['Member']:+.0f}% · C {rain_penalty['Casual']:+.0f}%"
-        else:
-            val = "—"
-        html = f"""
+        st.markdown(f"""
         <div class="kpi-box">
-            <h3>🌧️ {val}</h3>
-            <small>Rain penalty (wet vs dry)</small>
+            <div class="kpi-head"><span class="kpi-emoji">🌧️</span>Rain penalty</div>
+            <div class="kpi-value">{rain_txt}</div>
+            <div class="kpi-sub">Wet vs dry (group-wise)</div>
         </div>
-        """
-        st.markdown(html, unsafe_allow_html=True)
-
+        """, unsafe_allow_html=True)
     with ce:
-        html = f"""
+        st.markdown(f"""
         <div class="kpi-box">
-            <h3>🌡️ {temp_gap:+.1f}°C</h3>
-            <small>Temp pref. gap (C−M)</small>
+            <div class="kpi-head"><span class="kpi-emoji">🌡️</span>Temp pref. gap</div>
+            <div class="kpi-value">{temp_txt}</div>
+            <div class="kpi-sub">Casual − Member (median °C)</div>
         </div>
-        """ if temp_gap is not None and np.isfinite(temp_gap) else """
-        <div class="kpi-box">
-            <h3>🌡️ —</h3>
-            <small>Temp pref. gap</small>
-        </div>
-        """
-        st.markdown(html, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
 
     # ─────────── Tabs ───────────
     tab_beh, tab_wx, tab_perf, tab_station = st.tabs(
@@ -1789,12 +1810,14 @@ elif page == "Member vs Casual Profiles":
             dat["temp_band"] = pd.cut(dat["avg_temp_c"], tbins, labels=tlabs, include_lowest=True)
 
             gs = dat.groupby(["member_type_clean", "temp_band"])["speed_kmh"].median().reset_index()
-            figS = px.line(gs, x="temp_band", y="speed_kmh", color="member_type_clean", markers=True)
+            figS = px.line(gs, x="temp_band", y="speed_kmh", color="member_type_clean", markers=True,
+                           labels={"temp_band":"Temp band (°C)", "speed_kmh":"Median speed"})
             figS.update_layout(height=360, title="Median speed by temperature band")
             st.plotly_chart(figS, use_container_width=True)
 
             gd = dat.groupby(["member_type_clean", "temp_band"])["duration_min"].median().reset_index()
-            figD = px.line(gd, x="temp_band", y="duration_min", color="member_type_clean", markers=True)
+            figD = px.line(gd, x="temp_band", y="duration_min", color="member_type_clean", markers=True,
+                           labels={"temp_band":"Temp band (°C)", "duration_min":"Median duration (min)"})
             figD.update_layout(height=360, title="Median duration by temperature band")
             st.plotly_chart(figD, use_container_width=True)
 
