@@ -78,6 +78,18 @@ def show_cover(cover_path: Path):
         st.image(str(cover_path), use_column_width=True,
                  caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com")
 
+def quantile_bounds(s: pd.Series, lo=0.01, hi=0.995):
+    s = pd.to_numeric(s, errors="coerce")
+    ql, qh = s.quantile(lo), s.quantile(hi)
+    return float(ql), float(qh)
+
+def inlier_mask(df: pd.DataFrame, col: str, lo=0.01, hi=0.995):
+    if col not in df.columns:
+        return pd.Series([True]*len(df), index=df.index)
+    s = pd.to_numeric(df[col], errors="coerce")
+    ql, qh = quantile_bounds(s, lo, hi)
+    return (s >= ql) & (s <= qh)
+
 # ── UI helpers (Intro hero + KPI cards)
 def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
     """Bigger card height, slightly smaller fonts so the text fits."""
@@ -406,43 +418,117 @@ elif page == "Weather vs Bike Usage":
         st.markdown("**So what?** Warm days lift demand; shoulder seasons show the steepest slope. Staff rebalancing accordingly.")
 
 elif page == "Trip Metrics (Duration • Distance • Speed)":
-    st.header("🚴 Trip metrics")
+    st.header("🚴 Trip metrics (Duration • Distance • Speed)")
+
     need = {"duration_min","distance_km","speed_kmh"}
     if not need.issubset(df_f.columns):
         st.info("Need duration, distance, and speed (engineered in load_data).")
     else:
-        c1, c2, c3 = st.columns(3)
+        # --- Controls
+        c1, c2, c3, c4 = st.columns(4)
         with c1:
-            fig = px.histogram(df_f, x="duration_min", nbins=60,
-                               labels={"duration_min":"Duration (min)"})
-            fig.update_layout(height=420)
-            st.plotly_chart(fig, use_container_width=True)
+            robust = st.checkbox("Robust clipping (99.5%)", value=True, help="Hide extreme outliers that crush the axes.")
         with c2:
-            fig = px.histogram(df_f[df_f["distance_km"]<=15], x="distance_km", nbins=60,
-                               labels={"distance_km":"Distance (km)"})
-            fig.update_layout(height=420)
-            st.plotly_chart(fig, use_container_width=True)
+            log_duration = st.checkbox("Log X: Duration", value=False)
         with c3:
-            fig = px.histogram(df_f[df_f["speed_kmh"]<=40], x="speed_kmh", nbins=60,
-                               labels={"speed_kmh":"Speed (km/h)"})
+            log_distance = st.checkbox("Log X: Distance", value=False)
+        with c4:
+            log_speed = st.checkbox("Log X: Speed", value=False)
+
+        # --- Build inlier masks (independent per metric)
+        m_dur = inlier_mask(df_f, "duration_min", hi=0.995) if robust else pd.Series(True, index=df_f.index)
+        m_dst = inlier_mask(df_f, "distance_km", hi=0.995)  if robust else pd.Series(True, index=df_f.index)
+        m_spd = inlier_mask(df_f, "speed_kmh",   hi=0.995)  if robust else pd.Series(True, index=df_f.index)
+
+        # Also drop impossible/garbage values for plotting
+        m_dur &= df_f["duration_min"].between(0.5, 240, inclusive="both")   # keep 0.5–240 min
+        m_dst &= df_f["distance_km"].between(0.01, 30, inclusive="both")    # keep 10 m – 30 km
+        m_spd &= df_f["speed_kmh"].between(0.5, 60, inclusive="both")       # keep 0.5–60 km/h
+
+        # Count clipped rows
+        clipped_dur = int((~m_dur).sum())
+        clipped_dst = int((~m_dst).sum())
+        clipped_spd = int((~m_spd).sum())
+
+        # --- Histograms (robust ranges + optional log)
+        cA, cB, cC = st.columns(3)
+
+        with cA:
+            d = df_f.loc[m_dur, "duration_min"]
+            ql, qh = d.quantile([0.01, 0.995]).tolist()
+            fig = px.histogram(d, x="duration_min", nbins=60,
+                               labels={"duration_min":"Duration (min)"},
+                               log_x=log_duration,
+                               range_x=[ql, qh] if robust and not log_duration else None)
             fig.update_layout(height=420)
             st.plotly_chart(fig, use_container_width=True)
+            st.caption(f"Clipped rows (duration): {clipped_dur:,}")
 
+        with cB:
+            d = df_f.loc[m_dst, "distance_km"]
+            ql, qh = d.quantile([0.01, 0.995]).tolist()
+            fig = px.histogram(d, x="distance_km", nbins=60,
+                               labels={"distance_km":"Distance (km)"},
+                               log_x=log_distance,
+                               range_x=[ql, qh] if robust and not log_distance else None)
+            fig.update_layout(height=420)
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption(f"Clipped rows (distance): {clipped_dst:,}")
+
+        with cC:
+            d = df_f.loc[m_spd, "speed_kmh"]
+            ql, qh = d.quantile([0.01, 0.995]).tolist()
+            fig = px.histogram(d, x="speed_kmh", nbins=60,
+                               labels={"speed_kmh":"Speed (km/h)"},
+                               log_x=log_speed,
+                               range_x=[ql, qh] if robust and not log_speed else None)
+            fig.update_layout(height=420)
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption(f"Clipped rows (speed): {clipped_spd:,}")
+
+        # --- Scatter: distance vs duration (show inliers + faint outliers)
         st.subheader("Distance vs duration (by member type)")
         color_col = "member_type" if "member_type" in df_f.columns else None
-        fig2 = px.scatter(df_f.sample(n=min(20000, len(df_f)), random_state=3),
-                          x="distance_km", y="duration_min", color=color_col,
-                          trendline="ols" if color_col is None else None,
-                          labels={"distance_km":"Distance (km)", "duration_min":"Duration (min)"})
+
+        inliers = df_f[m_dst & m_dur].copy()
+        outliers = df_f[~(m_dst & m_dur)].copy()
+
+        # sample for speed
+        nmax = 30000
+        if len(inliers) > nmax:
+            inliers = inliers.sample(n=nmax, random_state=3)
+
+        fig2 = px.scatter(inliers, x="distance_km", y="duration_min", color=color_col,
+                          labels={"distance_km":"Distance (km)", "duration_min":"Duration (min)"},
+                          opacity=0.9)
+        if len(outliers):
+            fig2.add_trace(go.Scatter(
+                x=outliers["distance_km"], y=outliers["duration_min"],
+                mode="markers", name="Outliers", opacity=0.15, marker=dict(size=6)
+            ))
+        # lock axes to inlier range to prevent auto-expansion
+        xql, xqh = inliers["distance_km"].quantile([0.01, 0.995]).tolist()
+        yql, yqh = inliers["duration_min"].quantile([0.01, 0.995]).tolist()
+        fig2.update_xaxes(range=[xql, xqh])
+        fig2.update_yaxes(range=[yql, yqh])
         fig2.update_layout(height=520)
         st.plotly_chart(fig2, use_container_width=True)
 
+        # --- Optional: Speed vs temperature (also robust)
         if "avg_temp_c" in df_f.columns:
             st.subheader("Speed vs temperature")
-            fig3 = px.scatter(df_f.sample(n=min(20000, len(df_f)), random_state=4),
-                              x="avg_temp_c", y="speed_kmh", color=color_col,
-                              labels={"avg_temp_c":"Avg temperature (°C)", "speed_kmh":"Speed (km/h)"})
+            m_temp = df_f["avg_temp_c"].between(df_f["avg_temp_c"].quantile(0.01),
+                                                df_f["avg_temp_c"].quantile(0.995))
+            in2 = df_f[m_spd & m_temp]
+            if len(in2) > nmax:
+                in2 = in2.sample(n=nmax, random_state=4)
+            fig3 = px.scatter(in2, x="avg_temp_c", y="speed_kmh", color=color_col,
+                              labels={"avg_temp_c":"Avg temperature (°C)", "speed_kmh":"Speed (km/h)"},
+                              opacity=0.85)
+            fig3.update_layout(height=520)
             st.plotly_chart(fig3, use_container_width=True)
+
+        st.caption("Robust view clips only for plotting. All rows remain available for other pages/exports.")
 
 elif page == "Member vs Casual Profiles":
     st.header("👥 Member vs Casual riding patterns")
