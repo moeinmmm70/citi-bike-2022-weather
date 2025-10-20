@@ -489,9 +489,13 @@ if not DATA_PATH.exists():
 
 df = load_data(DATA_PATH, DATA_PATH.stat().st_mtime)
 
+# Sidebar reload button (works on old/new Streamlit)
 if st.sidebar.button("🔄 Reload data"):
     st.cache_data.clear()
-    st.experimental_rerun()
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:
+        st.experimental_rerun()
 
 # Date range
 date_min = pd.to_datetime(df["date"].min()) if "date" in df.columns else None
@@ -1262,15 +1266,20 @@ elif page == "OD Flows (Sankey) & Matrix":
         src = edges["start_station_name"].map(node_index)
         tgt = edges["end_station_name"].map(node_index)
 
-        # Optional link colors: by member group or neutral
+        # Link colors: by member group or neutral
         link_colors = None
         if member_split and "member_type_display" in edges.columns:
-            # Simple mapping per group (member/casual)
             color_map = {
                 "Member 🧑‍💼": "rgba(34,197,94,0.6)",  # green-ish
                 "Casual 🚲":   "rgba(37,99,235,0.6)",  # blue-ish
             }
-            link_colors = edges["member_type_display"].map(color_map).fillna("rgba(160,160,160,0.5)").tolist()
+            link_colors = (
+                edges["member_type_display"]
+                .astype("object")                # <-- break categorical dtype
+                .map(color_map)
+                .fillna("rgba(160,160,160,0.5)") # neutral for anything unmapped/NaN
+                .tolist()
+            )
 
         sankey = go.Sankey(
             node=dict(
@@ -1338,10 +1347,15 @@ elif page == "OD Flows (Sankey) & Matrix":
                 geo["width"] = (w_scale * (np.sqrt(edges[value_col]) / np.sqrt(maxv if maxv > 0 else 1.0))).clip(lower=0.5)
                 # Color by direction (blue) or member split if available
                 if member_split and "member_type_display" in geo.columns:
-                    geo["color"] = geo["member_type_display"].map({
+                    geo["color"] = geo["member_type_display"]
+                    .astype("object")
+                    .map({
                         "Member 🧑‍💼": [34,197,94,200],
                         "Casual 🚲":   [37,99,235,200],
-                    }).fillna([160,160,160,180])
+                    })
+                    )
+                    # Backfill any missing with a neutral color
+                    geo["color"] = geo["color"].apply(lambda v: v if isinstance(v, list) else [160,160,160,180])
                 else:
                     geo["color"] = [[37,99,235,200]] * len(geo)
 
