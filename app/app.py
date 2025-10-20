@@ -270,39 +270,97 @@ def _one_hot(s, prefix):
         d[f"{prefix}_0"] = 0
     return d
 
-def deweather_fit_predict(d: pd.DataFrame):
-    need = {"bike_rides_daily"}
-    if "avg_temp_c" in d.columns: need.add("avg_temp_c")
-    # graceful fallbacks
-    if not need.issubset(d.columns):
+def deweather_fit_predict(df_in: pd.DataFrame):
+    """
+    Fit a simple 'expected rides' model on rows where y is known, then predict for all rows.
+    Returns: (yhat_all: pd.Series, resid_pct: pd.Series, coefs: pd.Series) or None if not enough data.
+    """
+    need = {"bike_rides_daily", "avg_temp_c"}
+    if df_in is None or df_in.empty or not need.issubset(df_in.columns):
         return None
 
-    X = pd.DataFrame(index=d.index)
-    # Quadratic temp
-    X["t"]  = d["avg_temp_c"].astype(float)
-    X["t2"] = X["t"]**2
-    # Optional weather
-    if "precip_mm" in d.columns: X["precip"] = pd.to_numeric(d["precip_mm"], errors="coerce").fillna(0.0)
-    if "wind_kph" in d.columns:  X["wind"]   = pd.to_numeric(d["wind_kph"],  errors="coerce").fillna(0.0)
-    # Calendar effects
-    wk = None
-    mo = None
-    if "date" in d.columns:
-        wk = _one_hot(d["date"].dt.weekday, "wk")
-        mo = _one_hot(d["date"].dt.month,   "mo")
-    if wk is not None: X = pd.concat([X, wk], axis=1)
-    if mo is not None: X = pd.concat([X, mo], axis=1)
+    df = df_in.copy()
 
-    X = X.replace([np.inf, -np.inf], np.nan).fillna(0.0)
-    y = d["bike_rides_daily"].astype(float).values
-    Xmat = np.c_[np.ones(len(X)), X.values]  # intercept
+    # ---------- y (train only on rows that have y & temp) ----------
+    y = pd.to_numeric(df["bike_rides_daily"], errors="coerce")
+    t = pd.to_numeric(df["avg_temp_c"], errors="coerce")
+    train_mask = y.notna() & t.notna()
+    if train_mask.sum() < 10:
+        return None
 
-    beta, *_ = np.linalg.lstsq(Xmat, y, rcond=None)
-    yhat = Xmat @ beta
-    resid_pct = np.where(yhat>0, (y - yhat) / yhat * 100.0, np.nan)
+    # ---------- feature builder (keeps columns consistent across train/predict) ----------
+    def _build_X(frame: pd.DataFrame, wd_cols: list[str] | None = None):
+        n = len(frame)
+        parts = []
+        names = []
 
-    coefs = pd.Series(beta[1:], index=X.columns)  # standardized feel: show signs/mags
-    return pd.Series(yhat, index=d.index, name="yhat"), pd.Series(resid_pct, index=d.index, name="resid_pct"), coefs
+        def add_col(arr, name):
+            arr = pd.to_numeric(arr, errors="coerce").astype(float)
+            arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+            parts.append(arr.reshape(-1, 1))
+            names.append(name)
+
+        # Intercept
+        add_col(np.ones(n), "intercept")
+
+        # Temp + quad
+        tt = pd.to_numeric(frame["avg_temp_c"], errors="coerce")
+        add_col(tt, "temp_c")
+        add_col(tt**2, "temp_c_sq")
+
+        # Optional weather covariates
+        if "precip_mm" in frame.columns:
+            add_col(frame["precip_mm"], "precip_mm")
+        if "wind_kph" in frame.columns:
+            add_col(frame["wind_kph"], "wind_kph")
+        if "wet_day" in frame.columns:
+            # 0/1 as float
+            add_col(frame["wet_day"], "wet_day")
+
+        # Weekday dummies (no drop-first; least squares handles redundancy)
+        if "date" in frame.columns and pd.api.types.is_datetime64_any_dtype(frame["date"]):
+            wd = frame["date"].dt.weekday.astype("Int64").fillna(0).astype(int)
+            W = pd.get_dummies(wd, prefix="wd").astype(float)
+            if wd_cols is not None:
+                # ensure same dummy columns at predict time
+                W = W.reindex(columns=wd_cols, fill_value=0.0)
+            wd_cols_out = list(W.columns)
+            if len(wd_cols_out):
+                parts.append(W.to_numpy(dtype=float))
+                names.extend(wd_cols_out)
+        else:
+            wd_cols_out = []
+
+        X = np.hstack(parts).astype(float)
+        # clean any remaining bad values
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        return X, names, wd_cols_out
+
+    # --- Build train design matrix (captures weekday cols) ---
+    X_train, names, wd_cols = _build_X(df.loc[train_mask], wd_cols=None)
+    y_train = y.loc[train_mask].to_numpy(dtype=float)
+    good = np.isfinite(y_train).flatten() & np.isfinite(X_train).all(axis=1)
+    if good.sum() < 10:
+        return None
+    X_train = X_train[good]
+    y_train = y_train[good]
+
+    # --- Fit (robust to singularity) ---
+    beta, *_ = np.linalg.lstsq(X_train, y_train, rcond=None)
+    coefs = pd.Series(beta, index=names)
+
+    # --- Predict for ALL rows with the same columns ---
+    X_all, _, _ = _build_X(df, wd_cols=wd_cols)
+    yhat_all = pd.Series(X_all @ beta, index=df.index)
+
+    # --- Residuals (% vs expected) only where y is known ---
+    resid = pd.Series(np.nan, index=df.index, dtype=float)
+    resid.loc[train_mask] = y.loc[train_mask] - yhat_all.loc[train_mask]
+    denom = yhat_all.copy()
+    denom.replace(0, np.nan, inplace=True)
+    resid_pct = 100.0 * (resid / denom)
+
+    return yhat_all, resid_pct, coefs
 
 # UI helpers (Intro hero + KPI cards)
 def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
