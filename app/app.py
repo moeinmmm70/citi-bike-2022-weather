@@ -513,6 +513,37 @@ def inlier_mask(df: pd.DataFrame, col: str, lo=0.01, hi=0.995):
 # ────────────────────────────── Sidebar / Data ─────────────────────────────
 st.sidebar.header("⚙️ Controls")
 
+# --- quick presets row
+col_p1, col_p2 = st.sidebar.columns([1,1])
+with col_p1:
+    if st.button("✨ Commuter preset"):
+        # Weekdays 6–10 & 16–20, mild temps, members
+        st.session_state["page_select"] = "Weekday × Hour Heatmap"
+        if "weekday" in df.columns:
+            weekdays = ["Mon","Tue","Wed","Thu","Fri"]; st.query_params.update(weekday=",".join(weekdays))
+        if "hour" in df.columns: st.query_params.update(hour0="6", hour1="20")
+        if "avg_temp_c" in df.columns:
+            tmin, tmax = float(np.nanmin(df["avg_temp_c"])), float(np.nanmax(df["avg_temp_c"]))
+            st.query_params.update(temp=f"{max(tmin,5)}:{min(tmax,25)}")
+        if "member_type" in df.columns: st.query_params.update(usertype="member")
+
+with col_p2:
+    if st.button("🌧️ Rainy-day preset"):
+        st.session_state["page_select"] = "Weather vs Bike Usage"
+        if "wet_day" in df.columns: st.query_params.update(wet="1")
+
+# --- reset / share
+r1, r2 = st.sidebar.columns([1,1])
+with r1:
+    if st.button("♻️ Reset all"):
+        st.cache_data.clear()
+        if hasattr(st, "query_params"): st.query_params.clear()
+        st.rerun()
+with r2:
+    if st.button("🔗 Copy current link"):
+        st.sidebar.code(st.experimental_get_query_params() if not hasattr(st,"query_params") else dict(st.query_params))
+        st.caption("The current state is in the URL — copy from your browser bar.")
+
 if not DATA_PATH.exists():
     st.sidebar.error(f"Missing data: {DATA_PATH}")
     st.error("Data file not found. Create the ≤25MB sample CSV at data/processed/reduced_citibike_2022.csv.")
@@ -547,21 +578,24 @@ if "member_type" in df.columns:
         format_func=lambda v: "All" if v == "All" else MEMBER_LABELS.get(v, str(v).title())
     )
 
-# Temperature filter (optional)
-temp_range = None
-if "avg_temp_c" in df.columns:
-    tmin, tmax = float(np.nanmin(df["avg_temp_c"])), float(np.nanmax(df["avg_temp_c"]))
-    temp_range = st.sidebar.slider("Temperature filter (°C)", tmin, tmax, (tmin, tmax))
-
-# --- Time filters ---
+# --- Time filters (kept visible) ---
 hour_range = None
 if "hour" in df.columns:
-    hour_range = st.sidebar.slider("Hour of day", 0, 23, (6, 22))
+    hour_range = st.sidebar.slider("Hour of day", 0, 23, (6, 22), key="hour_slider")
 
-weekday_names = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
-weekdays = None
-if "weekday" in df.columns:
-    weekdays = st.sidebar.multiselect("Weekday(s)", weekday_names, default=weekday_names)
+# --- Collapsed: less-used filters ---
+temp_range, weekdays = None, None
+with st.sidebar.expander("More filters", expanded=False):
+    # Temperature
+    if "avg_temp_c" in df.columns:
+        tmin = float(np.nanmin(df["avg_temp_c"]))
+        tmax = float(np.nanmax(df["avg_temp_c"]))
+        temp_range = st.slider("Temperature (°C)", tmin, tmax, (tmin, tmax), key="temp_slider")
+
+    # Weekdays
+    if "weekday" in df.columns:
+        weekday_names = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
+        weekdays = st.multiselect("Weekday(s)", weekday_names, default=weekday_names, key="weekday_multi")
 
 st.sidebar.markdown("---")
 
@@ -610,19 +644,6 @@ page = st.sidebar.selectbox(
     key="page_select",
 )
 
-# After all filters are read, mirror state back to the URL (no overriding)
-try:
-    _qp_set(
-        page=page,
-        date0=str(date_range[0]) if date_range else None,
-        date1=str(date_range[1]) if date_range else None,
-        usertype=usertype or "All",
-        hour0=hour_range[0] if hour_range else None,
-        hour1=hour_range[1] if hour_range else None,
-    )
-except Exception:
-    pass
-
 # After filters chosen → write them to URL (safe)
 try:
     _qp_set(
@@ -649,6 +670,8 @@ df_f = apply_filters(
 
 daily_all = ensure_daily(df)
 daily_f   = ensure_daily(df_f)
+
+st.sidebar.success(f"✅ {len(df_f):,} trips match")
 
 # ---- backfill trip-level weather from daily ----
 def _backfill_trip_weather(df_trips: pd.DataFrame, daily_df: pd.DataFrame) -> pd.DataFrame:
@@ -681,6 +704,12 @@ df_f = _backfill_trip_weather(df_f, daily_all)
 # ────────────────────────────── Pages ──────────────────────────────────────
 if page == "Intro":
     render_hero_panel()
+    st.caption(
+        f"**Selection:** {date_range[0]} → {date_range[1]} · "
+        f"{'All seasons' if seasons is None or set(seasons)==set(['Winter','Spring','Summer','Autumn']) else ', '.join(seasons)} · "
+        f"{'All users' if (usertype in (None,'All')) else usertype.title()} · "
+        f"{'All day' if hour_range is None else f'{hour_range[0]:02d}:00–{hour_range[1]:02d}:00'}"
+    )
     show_cover(cover_path)
     st.caption("⚙️ Powered by NYC Citi Bike data • 365 days • Interactive visuals")
 
