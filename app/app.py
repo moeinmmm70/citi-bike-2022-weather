@@ -586,13 +586,69 @@ elif page == "Pareto: Share of Rides":
         st.markdown("**Action:** prioritize inventory and maintenance on the head of the curve; treat the tail as on-demand.")
 
 elif page == "Trip Flows Map":
+    # --- deps for this page ---
+    from pathlib import Path
+    import json, copy
+    import pandas as pd
+    import numpy as np
+    import plotly.graph_objects as go
+    from keplergl import KeplerGl
+    from streamlit_keplergl import keplergl_static
+
     st.header("🗺️ Trip flows (Kepler.gl)")
     st.caption(
-        "Note: The embedded Kepler.gl map is a static HTML export. "
-        "The **presets and widgets below** react to filters; the iframe itself does not."
+        "Now using live Kepler rendering. Choose a **Map preset** (JSON) to switch layers/filters/camera. "
+        "Your **Analysis preset** below only affects the widgets/tables."
     )
 
-    # ---------- Preset selector ----------
+    # ---------- Where to look for presets ----------
+    ROOT = Path(repo_root) if "repo_root" in globals() else Path.cwd()
+    preset_dirs = [
+        ROOT / "map",                              # your repo folder (as you uploaded)
+        ROOT / "data" / "reports" / "map",        # older path you used
+        ROOT / "data" / "reports" / "map" / "presets",
+    ]
+    preset_files = []
+    for d in preset_dirs:
+        if d.exists():
+            preset_files.extend(sorted(d.glob("*.json")))
+    presets = {p.stem: p for p in preset_files}
+
+    if not presets:
+        st.error("No Kepler presets found. Put JSON files in `map/` or `data/reports/map(/presets)/`.")
+        st.stop()
+
+    # ---------- Kepler map preset selector ----------
+    colA, colB = st.columns([1.2, 2.3])
+    with colA:
+        map_preset_name = st.selectbox("Map preset (Kepler JSON)", list(presets.keys()), index=0)
+    with colB:
+        st.caption("Switching this updates layers, filters, and camera instantly.")
+
+    # ---------- Load selected config and normalize dataset ids ----------
+    def load_config(path: Path) -> dict:
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def normalize_config_dataset_ids(cfg: dict, target_key: str = "trips") -> dict:
+        """Force all layers/filters to reference the in-app dataset key."""
+        cfg = copy.deepcopy(cfg)
+        vis = cfg.get("config", {}).get("visState", {})
+        for lyr in vis.get("layers", []):
+            if isinstance(lyr, dict) and "config" in lyr and "dataId" in lyr:
+                lyr["config"]["dataId"] = target_key
+        for flt in vis.get("filters", []):
+            if isinstance(flt, dict) and "dataId" in flt:
+                # dataId may be a list in newer Kepler configs
+                if isinstance(flt["dataId"], list):
+                    flt["dataId"] = [target_key for _ in flt["dataId"]]
+                else:
+                    flt["dataId"] = target_key
+        return cfg
+
+    raw_cfg = load_config(presets[map_preset_name])
+    cfg = normalize_config_dataset_ids(raw_cfg, target_key="trips")
+
+    # ---------- Your existing scenario (analysis) preset ----------
     preset = st.selectbox(
         "Analysis preset (applies to the widgets below)",
         [
@@ -604,7 +660,6 @@ elif page == "Trip Flows Map":
         ],
         index=0,
     )
-
     bullets = {
         "AM commute (Weekdays 07–10) • fair weather":
             "- **Inbound flows** to CBD/transit hubs\n- **Source→Sink pairs** for AM rebalancing\n- Stage trucks on corridors",
@@ -694,24 +749,12 @@ elif page == "Trip Flows Map":
     if preset_notes:
         st.info("Preset notes:\n- " + "\n- ".join(preset_notes))
 
-    # ---------- Kepler iframe ----------
-    path_to_html = None
-    for p in MAP_HTMLS:
-        if p.exists():
-            path_to_html = p
-            break
-    if not path_to_html:
-        st.info(
-            "Kepler.gl HTML not found.\n\nPlace one of:\n"
-            "- `reports/map/citibike_trip_flows_2022.html`\n"
-            "- `reports/map/NYC_Bike_Trips_Aggregated.html`"
-        )
-    else:
-        try:
-            html_data = Path(path_to_html).read_text(encoding="utf-8")
-            st.components.v1.html(html_data, height=900, scrolling=True)
-        except Exception as e:
-            st.error(f"Failed to load map HTML: {e}")
+    # ---------- Render Kepler with the selected map preset ----------
+    # IMPORTANT: KeplerGl expects a dict of dataframes keyed by the dataset id used in the config.
+    # We normalized config to expect "trips".
+    data_dict = {"trips": df_f}  # pass full df_f; filtering is handled by the Kepler config itself
+    m = KeplerGl(height=900, data=data_dict, config=cfg)
+    keplergl_static(m)
 
     # ---------- Context ----------
     st.markdown("### 🎯 What to look for")
@@ -720,9 +763,7 @@ elif page == "Trip Flows Map":
 
     # ---------- Branch: do we have end_station_name? ----------
     have_od = {"start_station_name", "end_station_name"}.issubset(dflow.columns)
-
     if not have_od:
-        # One concise notice (no st.stop, no duplication)
         st.warning(
             "This sample file lacks `end_station_name`. OD Sankey and station imbalance need both "
             "`start_station_name` **and** `end_station_name`.\n\n"
@@ -731,40 +772,7 @@ elif page == "Trip Flows Map":
             "`ride_id, started_at, start_station_name, end_station_name, date, avg_temp_c, member_type, season`"
         )
 
-        # --- Origin Hotspots (Top start stations) ---
-        st.subheader("🚉 Origin hotspots — top start stations")
-        if "start_station_name" not in dflow.columns or dflow.empty:
-            st.info("No start station data after filters.")
-        else:
-            topN = st.slider("Show top N stations", 10, 50, 20, 5, key="orig_topN")
-            starts = (
-                dflow.assign(n=1)
-                .groupby("start_station_name")["n"].sum()
-                .sort_values(ascending=False)
-                .head(topN)
-                .reset_index()
-            )
-            starts["label"] = starts["start_station_name"].astype(str).map(lambda s: shorten_name(s, 28))
-
-            fig_o = go.Figure(go.Bar(
-                x=starts["label"], y=starts["n"], text=starts["n"], textposition="outside",
-                hovertext=starts["start_station_name"],
-                hovertemplate="<b>%{hovertext}</b><br>Rides: %{y:,}<extra></extra>"
-            ))
-            fig_o.update_layout(height=560, title=f"Top {topN} origins — {preset}",
-                                margin=dict(l=20, r=20, t=60, b=100))
-            fig_o.update_xaxes(title="Station", tickangle=45, tickfont=dict(size=10))
-            fig_o.update_yaxes(title="Rides (count)")
-            st.plotly_chart(fig_o, use_container_width=True)
-
-            st.download_button(
-                "⬇️ Download origins (CSV)",
-                starts.rename(columns={"start_station_name":"station", "n":"rides"}).to_csv(index=False).encode("utf-8"),
-                "origin_hotspots.csv", "text/csv"
-            )
-
-        # --- AM vs PM origin load (weekdays) ---
-        if has_started_at and not dflow.empty:
+        if ("started_at" in dflow.columns) and not dflow.empty:
             st.subheader("⏰ AM vs PM origin load (weekdays)")
             dtx = pd.to_datetime(dflow["started_at"], errors="coerce")
             weekdays = dtx.dt.weekday <= 4
@@ -786,85 +794,6 @@ elif page == "Trip Flows Map":
 
         st.caption("Once you include `end_station_name`, this page will show OD Sankey and Source/Sink imbalance automatically.")
         st.stop()
-
-    # ---------- Full OD widgets (runs only when end_station_name exists) ----------
-
-    # Top OD pairs (Sankey)
-    st.subheader("Top origin → destination flows (Sankey)")
-    topN = st.slider("Show top N OD pairs", 10, 50, 20, 5, key="od_topN")
-    flows = (
-        dflow.groupby(["start_station_name", "end_station_name"])
-        .size()
-        .reset_index(name="count")
-        .sort_values("count", ascending=False)
-        .head(topN)
-    )
-    if flows.empty:
-        st.info("No trips after filters/preset.")
-    else:
-        labels = pd.Index(pd.concat([flows["start_station_name"], flows["end_station_name"]]).unique())
-        lab2id = {v: i for i, v in enumerate(labels)}
-        src = flows["start_station_name"].map(lab2id)
-        tgt = flows["end_station_name"].map(lab2id)
-        fig = go.Figure(data=[go.Sankey(
-            node=dict(label=[shorten_name(x, 26) for x in labels], pad=18, thickness=14),
-            link=dict(source=src, target=tgt, value=flows["count"])
-        )])
-        fig.update_layout(height=520, title=f"Top {len(flows)} OD pairs — {preset}")
-        st.plotly_chart(fig, use_container_width=True)
-
-        st.download_button(
-            "⬇️ Download OD pairs (CSV)",
-            flows.rename(columns={"start_station_name":"origin","end_station_name":"destination","count":"rides"})
-                 .to_csv(index=False).encode("utf-8"),
-            "top_od_pairs.csv", "text/csv",
-        )
-
-    # Station imbalance
-    st.markdown("### ⚖️ Station imbalance — sources vs sinks")
-    start_counts = dflow.groupby("start_station_name").size().rename("departures")
-    end_counts   = dflow.groupby("end_station_name").size().rename("arrivals")
-    bal = pd.concat([start_counts, end_counts], axis=1).fillna(0)
-    bal["net"] = bal["arrivals"] - bal["departures"]
-    bal = bal.sort_values("net", ascending=False)
-
-    k = st.slider("Top K sinks/sources", 5, 20, 10, key="imb_k")
-    sinks   = bal.head(k).reset_index().rename(columns={"index":"station"})
-    sources = bal.tail(k).reset_index().rename(columns={"index":"station"})
-
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("**Top sinks (more arrivals than departures)**")
-        fig_sink = go.Figure(go.Bar(
-            x=[shorten_name(s, 28) for s in sinks["station"]],
-            y=sinks["net"], text=sinks["net"].astype(int), textposition="outside",
-        ))
-        friendly_axis(fig_sink, x="Station", y="Net inflow (arrivals − departures)")
-        fig_sink.update_layout(height=420, margin=dict(l=20, r=20, t=40, b=80))
-        fig_sink.update_xaxes(tickangle=45, tickfont=dict(size=10))
-        st.plotly_chart(fig_sink, use_container_width=True)
-
-    with c2:
-        st.markdown("**Top sources (more departures than arrivals)**")
-        srcs = sources.copy(); srcs["pos"] = -srcs["net"]
-        fig_src = go.Figure(go.Bar(
-            x=[shorten_name(s, 28) for s in srcs["station"]],
-            y=srcs["pos"], text=(-srcs["net"]).astype(int), textposition="outside",
-        ))
-        friendly_axis(fig_src, x="Station", y="Net outflow (departures − arrivals)")
-        fig_src.update_layout(height=420, margin=dict(l=20, r=20, t=40, b=80))
-        fig_src.update_xaxes(tickangle=45, tickfont=dict(size=10))
-        st.plotly_chart(fig_src, use_container_width=True)
-
-    st.download_button(
-        "⬇️ Download station imbalance (CSV)",
-        bal.reset_index().rename(columns={"index":"station"}).to_csv(index=False).encode("utf-8"),
-        "station_imbalance.csv", "text/csv",
-    )
-
-    st.caption(f"ℹ️ Preset “{preset}” shapes both OD and imbalance widgets. "
-               f"Kepler map is static — rebuild or use pydeck for dynamic filtering.")
-
 
 elif page == "Weekday × Hour Heatmap":
     st.header("⏰ Temporal load — weekday × start hour")
