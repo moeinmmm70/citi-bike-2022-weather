@@ -7,20 +7,22 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.io as pio
-import unicodedata  # used by _slug()
-
-# Optional ML
+from urllib.parse import quote, unquote
+import unicodedata
 try:
     from sklearn.linear_model import LinearRegression
 except Exception:
     LinearRegression = None
-
-# Optional clustering
 try:
     from scipy.cluster.hierarchy import linkage, leaves_list
 except Exception:
     linkage = leaves_list = None
-
+# Optional ML: linear simulator
+try:
+    from sklearn.linear_model import LinearRegression
+except Exception:
+    LinearRegression = None
+    
 # ────────────────────────────── Page/Theming ──────────────────────────────
 st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", page_icon="🚲", layout="wide")
 pio.templates.default = "plotly_white"
@@ -45,7 +47,6 @@ MEMBER_LEGEND_TITLE = "Member Type"
 
 # ────────────────────────────── Helpers ───────────────────────────────────
 def kfmt(x):
-    """Human-friendly counts: 1.2K, 3.4M, etc."""
     try:
         x = float(x)
     except Exception:
@@ -70,21 +71,19 @@ def friendly_axis(fig, x=None, y=None, title=None, colorbar=None):
             if hasattr(tr, "colorbar") and tr.colorbar:
                 tr.colorbar.title = colorbar
 
-def safe_corr(a: pd.Series, b: pd.Series):
-    """NaN-safe Pearson correlation on overlapping dates; returns None if <3 points."""
+def safe_corr(a: pd.Series, b: pd.Series) -> float | None:
     a, b = a.dropna(), b.dropna()
     j = a.index.intersection(b.index)
     if len(j) < 3:
         return None
-    c = np.corrcoef(a.loc[j], b.loc[j])[0, 1]
+    c = np.corrcoef(a.loc[j], b.loc[j])[0,1]
     return float(c)
 
 def linear_fit(x: pd.Series, y: pd.Series):
-    """Lightweight linear fit using numpy.polyfit; returns slope, intercept, and a predictor."""
     valid = (~x.isna()) & (~y.isna())
     x, y = x[valid], y[valid]
     if len(x) < 2:
-        return None, None, (lambda z: np.nan)
+        return None, None, lambda z: np.nan
     a, b = np.polyfit(x, y, 1)
     return float(a), float(b), (lambda z: a * np.asarray(z) + b)
 
@@ -98,9 +97,8 @@ def show_cover(cover_path: Path):
     except TypeError:
         st.image(str(cover_path), use_column_width=True,
                  caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com")
-
 def _bin_hour(h: pd.Series, bin_size: int) -> pd.Series:
-    """Bin integer hours (0–23) into groups of size bin_size."""
+    # Bin 0-23 into 1/2/3-hr buckets
     b = (h // bin_size) * bin_size
     return b.clip(0, 23)
 
@@ -113,16 +111,17 @@ def _make_heat_grid(df: pd.DataFrame,
                     hour_bin: int = 1,
                     scale: str = "Absolute") -> pd.DataFrame:
     """
-    Build a 7 × (24/hour_bin) matrix of ride counts with optional scaling.
+    Returns a 7 x (24/hr_bin) grid with chosen scaling.
     scale ∈ {"Absolute", "Row %", "Column %", "Z-score"}.
     """
-    if hour_col not in df.columns or weekday_col not in df.columns or df.empty:
+    if hour_col not in df.columns or weekday_col not in df.columns:
         return pd.DataFrame()
 
     d = df[[hour_col, weekday_col]].dropna().copy()
     d[hour_col] = _bin_hour(d[hour_col].astype(int), hour_bin)
-
+    # count rides
     g = d.groupby([weekday_col, hour_col]).size().rename("rides").reset_index()
+    # build full matrix (fill missing cells with 0)
     hours = list(range(0, 24, hour_bin))
     mat = (g.pivot(index=weekday_col, columns=hour_col, values="rides")
              .reindex(index=range(0,7), columns=hours)
@@ -130,20 +129,27 @@ def _make_heat_grid(df: pd.DataFrame,
 
     if scale == "Absolute":
         return mat
+
     if scale == "Row %":
+        # Normalize by weekday (row)
         row_sum = mat.sum(axis=1).replace(0, np.nan)
         return (mat.div(row_sum, axis=0) * 100).fillna(0)
+
     if scale == "Column %":
+        # Normalize by hour (column)
         col_sum = mat.sum(axis=0).replace(0, np.nan)
         return (mat.div(col_sum, axis=1) * 100).fillna(0)
+
     if scale == "Z-score":
+        # Center/scale per row (weekday)
         m = mat.mean(axis=1)
         s = mat.std(axis=1).replace(0, np.nan)
         return ((mat.sub(m, axis=0)).div(s, axis=0)).fillna(0)
+
     return mat
 
 def _smooth_by_hour(mat: pd.DataFrame, k: int = 3) -> pd.DataFrame:
-    """Moving-average smoothing across hours per weekday (window k, odd)."""
+    """Simple 1D moving-average smoothing across hours per weekday (window k, odd)."""
     if mat.empty or k <= 1:
         return mat
     k = max(1, int(k))
@@ -157,25 +163,23 @@ def _smooth_by_hour(mat: pd.DataFrame, k: int = 3) -> pd.DataFrame:
     return out
 
 def _add_peak_annotation(fig, mat: pd.DataFrame, title_suffix=""):
-    """Annotate the peak cell in a heatmap-like matrix."""
+    # find max cell; annotate
     if mat.empty:
         return fig
-    r, c = np.unravel_index(np.nanargmax(mat.values), mat.shape)
+    idx = np.unravel_index(np.nanargmax(mat.values), mat.shape)
+    r, c = idx[0], idx[1]
     wk = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][r]
     hr = mat.columns[c]
     val = mat.iloc[r, c]
     fig.add_annotation(
-        x=c, y=r,
-        text=f"Peak: {wk} {hr:02d}:00<br>{val:,.0f}" if np.isfinite(val) else "Peak",
-        showarrow=True, arrowhead=2, ax=40, ay=-40,
-        bgcolor="rgba(0,0,0,0.6)", font=dict(color="white", size=11)
+        x=c, y=r, text=f"Peak: {wk} {hr:02d}:00<br>{val:,.0f}" if np.isfinite(val) else "Peak",
+        showarrow=True, arrowhead=2, ax=40, ay=-40, bgcolor="rgba(0,0,0,0.6)", font=dict(color="white", size=11)
     )
     if title_suffix:
-        fig.update_layout(title=(fig.layout.title.text or "") + title_suffix)
+        fig.update_layout(title=fig.layout.title.text + title_suffix)
     return fig
 
 def _time_slice(df: pd.DataFrame, mode: str) -> pd.DataFrame:
-    """Return a sliced dataframe by common commute windows / weekday vs weekend."""
     if "hour" not in df.columns or "weekday" not in df.columns:
         return df
     if mode == "AM (06–11)":   return df[(df["hour"] >= 6)  & (df["hour"] <= 11)]
@@ -183,6 +187,266 @@ def _time_slice(df: pd.DataFrame, mode: str) -> pd.DataFrame:
     if mode == "Weekend":      return df[df["weekday"].isin([5,6])]
     if mode == "Weekday":      return df[df["weekday"].isin([0,1,2,3,4])]
     return df
+
+def _build_od_edges(df: pd.DataFrame,
+                    per_origin: bool,
+                    topk: int,
+                    min_rides: int,
+                    drop_self_loops: bool,
+                    member_split: bool) -> pd.DataFrame:
+    # Guard
+    need = {"start_station_name", "end_station_name"}
+    if not need.issubset(df.columns) or df.empty:
+        return pd.DataFrame(columns=["start_station_name","end_station_name","rides"])
+
+    gb_cols = ["start_station_name", "end_station_name"]
+    if member_split and "member_type_display" in df.columns:
+        gb_cols.append("member_type_display")
+
+    # Count rides
+    g = (df.dropna(subset=["start_station_name","end_station_name"])
+           .groupby(gb_cols).size().rename("rides").reset_index())
+
+    # Optional medians if available
+    if "distance_km" in df.columns:
+        med_dist = df.groupby(gb_cols)["distance_km"].median().reset_index(name="med_distance_km")
+        g = g.merge(med_dist, on=gb_cols, how="left")
+    if "duration_min" in df.columns:
+        med_dur = df.groupby(gb_cols)["duration_min"].median().reset_index(name="med_duration_min")
+        g = g.merge(med_dur, on=gb_cols, how="left")
+
+    # Drop self-loops (cast to str to be safe)
+    if drop_self_loops and not g.empty:
+        s = g["start_station_name"].astype(str)
+        e = g["end_station_name"].astype(str)
+        g = g[s != e]
+
+    # Threshold
+    g = g[g["rides"] >= int(min_rides)]
+    if g.empty:
+        return g
+
+    # Top-k selection
+    if per_origin:
+        by = ["start_station_name"]
+        if "member_type_display" in g.columns and member_split:
+            by.append("member_type_display")
+        g = (g.sort_values("rides", ascending=False)
+               .groupby(by, as_index=False)
+               .head(int(topk)))
+    else:
+        g = g.sort_values("rides", ascending=False).head(int(topk))
+
+    return g.reset_index(drop=True)
+
+@st.cache_data(show_spinner=False)
+def _cached_edges(df: pd.DataFrame,
+                  per_origin: bool,
+                  topk: int,
+                  min_rides: int,
+                  drop_self_loops: bool,
+                  member_split: bool) -> pd.DataFrame:
+    try:
+        return _build_od_edges(df, per_origin, topk, min_rides, drop_self_loops, member_split)
+    except Exception as e:
+        st.warning(f"Edge build failed: {e}")
+        return pd.DataFrame(columns=["start_station_name","end_station_name","rides"])
+
+def _matrix_from_edges(edges: pd.DataFrame, member_split: bool) -> pd.DataFrame:
+    if edges.empty: return pd.DataFrame()
+    base = edges.copy()
+    if member_split and "member_type_display" in base.columns:
+        base = base.groupby(["start_station_name","end_station_name"], as_index=False)["rides"].sum()
+    mat = (base.pivot(index="start_station_name", columns="end_station_name", values="rides").fillna(0))
+    # order for readability
+    mat = mat.loc[mat.sum(axis=1).sort_values(ascending=False).index,
+                  mat.sum(axis=0).sort_values(ascending=False).index]
+    return mat
+
+def _one_hot(s, prefix):
+    s = s.astype("int64")
+    d = pd.get_dummies(s, prefix=prefix, drop_first=True)
+    if d.shape[1] == 0:
+        # Ensure at least one column for stability
+        d[f"{prefix}_0"] = 0
+    return d
+
+def deweather_fit_predict(df_in: pd.DataFrame):
+    """
+    Fit a simple 'expected rides' model on rows where y is known, then predict for all rows.
+    Returns: (yhat_all: pd.Series, resid_pct: pd.Series, coefs: pd.Series) or None if not enough data.
+    """
+    need = {"bike_rides_daily", "avg_temp_c"}
+    if df_in is None or df_in.empty or not need.issubset(df_in.columns):
+        return None
+
+    df = df_in.copy()
+
+    # ---------- y (train only on rows that have y & temp) ----------
+    y = pd.to_numeric(df["bike_rides_daily"], errors="coerce")
+    t = pd.to_numeric(df["avg_temp_c"], errors="coerce")
+    train_mask = y.notna() & t.notna()
+    if train_mask.sum() < 10:
+        return None
+
+    # ---------- feature builder (keeps columns consistent across train/predict) ----------
+    def _build_X(frame: pd.DataFrame, wd_cols: list[str] | None = None):
+        n = len(frame)
+        parts = []
+        names = []
+
+        def add_col(arr, name):
+            arr = pd.to_numeric(arr, errors="coerce").astype(float)
+            arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+            parts.append(arr.reshape(-1, 1))
+            names.append(name)
+
+        # Intercept
+        add_col(np.ones(n), "intercept")
+
+        # Temp + quad
+        tt = pd.to_numeric(frame["avg_temp_c"], errors="coerce")
+        add_col(tt, "temp_c")
+        add_col(tt**2, "temp_c_sq")
+
+        # Optional weather covariates
+        if "precip_mm" in frame.columns:
+            add_col(frame["precip_mm"], "precip_mm")
+        if "wind_kph" in frame.columns:
+            add_col(frame["wind_kph"], "wind_kph")
+        if "wet_day" in frame.columns:
+            # 0/1 as float
+            add_col(frame["wet_day"], "wet_day")
+
+        # Weekday dummies (no drop-first; least squares handles redundancy)
+        if "date" in frame.columns and pd.api.types.is_datetime64_any_dtype(frame["date"]):
+            wd = frame["date"].dt.weekday.astype("Int64").fillna(0).astype(int)
+            W = pd.get_dummies(wd, prefix="wd").astype(float)
+            if wd_cols is not None:
+                # ensure same dummy columns at predict time
+                W = W.reindex(columns=wd_cols, fill_value=0.0)
+            wd_cols_out = list(W.columns)
+            if len(wd_cols_out):
+                parts.append(W.to_numpy(dtype=float))
+                names.extend(wd_cols_out)
+        else:
+            wd_cols_out = []
+
+        X = np.hstack(parts).astype(float)
+        # clean any remaining bad values
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        return X, names, wd_cols_out
+
+    # --- Build train design matrix (captures weekday cols) ---
+    X_train, names, wd_cols = _build_X(df.loc[train_mask], wd_cols=None)
+    y_train = y.loc[train_mask].to_numpy(dtype=float)
+    good = np.isfinite(y_train).flatten() & np.isfinite(X_train).all(axis=1)
+    if good.sum() < 10:
+        return None
+    X_train = X_train[good]
+    y_train = y_train[good]
+
+    # --- Fit (robust to singularity) ---
+    beta, *_ = np.linalg.lstsq(X_train, y_train, rcond=None)
+    coefs = pd.Series(beta, index=names)
+
+    # --- Predict for ALL rows with the same columns ---
+    X_all, _, _ = _build_X(df, wd_cols=wd_cols)
+    yhat_all = pd.Series(X_all @ beta, index=df.index)
+
+    # --- Residuals (% vs expected) only where y is known ---
+    resid = pd.Series(np.nan, index=df.index, dtype=float)
+    resid.loc[train_mask] = y.loc[train_mask] - yhat_all.loc[train_mask]
+    denom = yhat_all.copy()
+    denom.replace(0, np.nan, inplace=True)
+    resid_pct = 100.0 * (resid / denom)
+
+    return yhat_all, resid_pct, coefs
+
+def _slug(s: str) -> str:
+    if s is None:
+        return ""
+    # strip emojis/accents, collapse spaces, lowercase
+    s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode()
+    return " ".join(s.split()).lower()
+
+# UI helpers (Intro hero + KPI cards)
+def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
+    st.markdown(
+        f"""
+        <div class="kpi-card">
+            <div class="kpi-title">{icon} {title}</div>
+            <div class="kpi-value" title="{value}">{value}</div>
+            <div class="kpi-sub">{sub}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def render_hero_panel():
+    st.markdown(
+        """
+        <style>
+        .hero-panel {
+            background: linear-gradient(180deg, rgba(18,22,28,0.95) 0%, rgba(18,22,28,0.86) 100%);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 24px;
+            padding: 22px 24px;
+            box-shadow: 0 8px 18px rgba(0,0,0,0.28);
+            text-align: center;
+        }
+        .hero-title {
+            color: #f8fafc;
+            font-size: clamp(1.4rem, 1.2rem + 1.6vw, 2.3rem);
+            font-weight: 800;
+            letter-spacing: .2px;
+            margin: 2px 0 6px 0;
+        }
+        .hero-sub {
+            color: #cbd5e1;
+            font-size: clamp(.85rem, .8rem + .3vw, 1.0rem);
+            margin: 0;
+        }
+        .kpi-card {
+            background: linear-gradient(180deg, rgba(25,31,40,0.80) 0%, rgba(16,21,29,0.86) 100%);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 24px;
+            padding: 16px 18px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.28);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            min-height: 160px;
+            display: flex; flex-direction: column; justify-content: space-between;
+        }
+        .kpi-title {
+            font-size: .95rem;
+            color: #cbd5e1;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            margin-bottom: 6px;
+            letter-spacing: .2px;
+        }
+        .kpi-value {
+            font-size: clamp(1.25rem, 1.0rem + 1.2vw, 2.0rem);
+            font-weight: 800;
+            color: #f8fafc;
+            line-height: 1.08;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .kpi-sub {
+            font-size: .90rem;
+            color: #94a3b8;
+            margin-top: 6px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .element-container img { border-radius: 16px; }
+        </style>
+        <div class="hero-panel">
+            <h1 class="hero-title">NYC Citi Bike — Strategy Dashboard</h1>
+            <p class="hero-sub">Seasonality • Weather–demand correlation • Station intelligence • Time patterns</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 # ────────────────────────────── Data loading & features ────────────────────
 def _haversine_km(lat1, lon1, lat2, lon2):
@@ -355,52 +619,96 @@ def inlier_mask(df: pd.DataFrame, col: str, lo=0.01, hi=0.995):
     ql, qh = quantile_bounds(s, lo, hi)
     return (s >= ql) & (s <= qh)
 
-# ────────────────────────────── Sidebar / Data (fixed order) ──────────────
+# ────────────────────────────── Sidebar / Data ─────────────────────────────
 st.sidebar.header("⚙️ Controls")
 
-# Guard + load
+# --- quick presets row
+col_p1, col_p2 = st.sidebar.columns([1,1])
+with col_p1:
+    if st.button("✨ Commuter preset"):
+        # Weekdays 6–10 & 16–20, mild temps, members
+        st.session_state["page_select"] = "Weekday × Hour Heatmap"
+        if "weekday" in df.columns:
+            weekdays = ["Mon","Tue","Wed","Thu","Fri"]; st.query_params.update(weekday=",".join(weekdays))
+        if "hour" in df.columns: st.query_params.update(hour0="6", hour1="20")
+        if "avg_temp_c" in df.columns:
+            tmin, tmax = float(np.nanmin(df["avg_temp_c"])), float(np.nanmax(df["avg_temp_c"]))
+            st.query_params.update(temp=f"{max(tmin,5)}:{min(tmax,25)}")
+        if "member_type" in df.columns: st.query_params.update(usertype="member")
+
+with col_p2:
+    if st.button("🌧️ Rainy-day preset"):
+        st.session_state["page_select"] = "Weather vs Bike Usage"
+        if "wet_day" in df.columns: st.query_params.update(wet="1")
+
+# --- reset / share
+r1, r2 = st.sidebar.columns([1,1])
+with r1:
+    if st.button("♻️ Reset all"):
+        st.cache_data.clear()
+        if hasattr(st, "query_params"): st.query_params.clear()
+        st.rerun()
+with r2:
+    if st.button("🔗 Copy current link"):
+        st.sidebar.code(st.experimental_get_query_params() if not hasattr(st,"query_params") else dict(st.query_params))
+        st.caption("The current state is in the URL — copy from your browser bar.")
+
 if not DATA_PATH.exists():
     st.sidebar.error(f"Missing data: {DATA_PATH}")
     st.error("Data file not found. Create the ≤25MB sample CSV at data/processed/reduced_citibike_2022.csv.")
     st.stop()
 
 df = load_data(DATA_PATH, DATA_PATH.stat().st_mtime)
-st.sidebar.success(f"Data loaded: {len(df):,} rows")
 
-# Core filters
+# Sidebar reload button (works on old/new Streamlit)
+if st.sidebar.button("🔄 Reload data"):
+    st.cache_data.clear()
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:
+        st.experimental_rerun()
+
+# Date range
 date_min = pd.to_datetime(df["date"].min()) if "date" in df.columns else None
 date_max = pd.to_datetime(df["date"].max()) if "date" in df.columns else None
 date_range = st.sidebar.date_input("Date range", value=(date_min, date_max)) if date_min is not None else None
 
-hour_range = st.sidebar.slider("Hour of day", 0, 23, (6, 22), key="hour_slider") if "hour" in df.columns else None
-
+# Season
 seasons_all = ["Winter","Spring","Summer","Autumn"]
 seasons = st.sidebar.multiselect("Season(s)", seasons_all, default=seasons_all) if "season" in df.columns else None
 
+# Member type (pretty labels; raw value for filtering)
 usertype = None
 if "member_type" in df.columns:
     raw_opts = ["All"] + sorted(df["member_type"].astype(str).unique().tolist())
     usertype = st.sidebar.selectbox(
         "User type",
         raw_opts,
-        key="user_type_select",
-        format_func=lambda v: "All" if v == "All" else MEMBER_LABELS.get(v, str(v).title()),
+        format_func=lambda v: "All" if v == "All" else MEMBER_LABELS.get(v, str(v).title())
     )
 
-# Advanced (collapsed)
+# --- Time filters (kept visible) ---
+hour_range = None
+if "hour" in df.columns:
+    hour_range = st.sidebar.slider("Hour of day", 0, 23, (6, 22), key="hour_slider")
+
+# --- Collapsed: less-used filters ---
 temp_range, weekdays = None, None
 with st.sidebar.expander("More filters", expanded=False):
+    # Temperature
     if "avg_temp_c" in df.columns:
         tmin = float(np.nanmin(df["avg_temp_c"]))
         tmax = float(np.nanmax(df["avg_temp_c"]))
         temp_range = st.slider("Temperature (°C)", tmin, tmax, (tmin, tmax), key="temp_slider")
+
+    # Weekdays
     if "weekday" in df.columns:
         weekday_names = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
         weekdays = st.multiselect("Weekday(s)", weekday_names, default=weekday_names, key="weekday_multi")
 
 st.sidebar.markdown("---")
 
-# URL helpers (read/write after widgets exist)
+# ── URL state: read (on load) and write (after filters) ──
 def _qp_get():
     if hasattr(st, "query_params"):  # Streamlit ≥1.31
         return dict(st.query_params)
@@ -415,7 +723,6 @@ def _qp_set(**kv):
     except Exception:
         pass
 
-# Page list (keep your order or replace later globally)
 PAGES = [
     "Intro",
     "Weather vs Bike Usage",
@@ -430,7 +737,7 @@ PAGES = [
     "Recommendations",
 ]
 
-# Seed default page from URL if present
+# Seed default page from URL (if present), otherwise first page
 _qp = _qp_get()
 _qp_page = None
 if "page" in _qp:
@@ -438,45 +745,15 @@ if "page" in _qp:
 if _qp_page not in PAGES:
     _qp_page = PAGES[0]
 
-page = st.sidebar.selectbox("📑 Analysis page", PAGES, index=PAGES.index(_qp_page), key="page_select")
+# The widget value drives the app; we do NOT override it afterwards
+page = st.sidebar.selectbox(
+    "📑 Analysis page",
+    PAGES,
+    index=PAGES.index(_qp_page),
+    key="page_select",
+)
 
-# ---- SAFE PRESETS (after widgets exist; use session_state, not query_params) ----
-with st.sidebar.expander("Presets", expanded=False):
-    c1, c2 = st.columns(2)
-
-    def _set_if_exists(key, value):
-        if key in st.session_state:
-            st.session_state[key] = value
-
-    with c1:
-        if st.button("✨ Commuter (weekday peaks)"):
-            _set_if_exists("page_select", "Weekday × Hour Heatmap")
-            _set_if_exists("hour_slider", (6, 20))
-            if "weekday_multi" in st.session_state:
-                st.session_state["weekday_multi"] = ["Mon","Tue","Wed","Thu","Fri"]
-            if "user_type_select" in st.session_state and "member_type" in df.columns:
-                st.session_state["user_type_select"] = "member"
-
-    with c2:
-        if st.button("🌧️ Rainy-day focus"):
-            _set_if_exists("page_select", "Weather vs Bike Usage")
-
-# Utilities
-u1, u2 = st.sidebar.columns(2)
-with u1:
-    if st.button("🔄 Reload data"):
-        st.cache_data.clear()
-        st.rerun()
-with u2:
-    if st.button("♻️ Reset all"):
-        st.cache_data.clear()
-        if hasattr(st, "query_params"):
-            st.query_params.clear()
-        for k in list(st.session_state.keys()):
-            del st.session_state[k]
-        st.rerun()
-
-# Write current state to URL (optional)
+# After filters chosen → write them to URL (safe)
 try:
     _qp_set(
         page=page,
@@ -484,12 +761,12 @@ try:
         date1=str(date_range[1]) if date_range else None,
         usertype=usertype or "All",
         hour0=hour_range[0] if hour_range else None,
-        hour1=hour_range[1] if hour_range else None,
+        hour1=hour_range[1] if hour_range else None
     )
 except Exception:
     pass
 
-# Apply filters
+# Filtered data
 df_f = apply_filters(
     df,
     (pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])) if date_range else None,
@@ -534,35 +811,16 @@ def _backfill_trip_weather(df_trips: pd.DataFrame, daily_df: pd.DataFrame) -> pd
 df_f = _backfill_trip_weather(df_f, daily_all)
 
 # ────────────────────────────── Pages ──────────────────────────────────────
-def _scatter_with_optional_ols(df, **kwargs):
-    """Use OLS trendline only if statsmodels is installed; otherwise plain scatter."""
-    try:
-        import statsmodels.api as sm  # noqa: F401
-        return px.scatter(df, trendline="ols", **kwargs)
-    except Exception:
-        return px.scatter(df, **kwargs)
-
 if page == "Intro":
     render_hero_panel()
 
-    # Selection summary (robust)
-    def _fmt_date(d):
-        try:
-            return pd.to_datetime(d).date().isoformat()
-        except Exception:
-            return "—"
-
-    all_seasons = {"Winter","Spring","Summer","Autumn"}
-    sel_seasons = "All seasons" if not seasons or set(seasons) == all_seasons else ", ".join(seasons)
-    sel_users   = "All users" if (usertype in (None, "All")) else str(usertype).title()
-    sel_hours   = "All day" if hour_range is None else f"{int(hour_range[0]):02d}:00–{int(hour_range[1]):02d}:00"
-
-    if date_range:
-        sel_dates = f"{_fmt_date(date_range[0])} → {_fmt_date(date_range[1])}"
-    else:
-        sel_dates = "—"
-
-    st.caption(f"**Selection:** {sel_dates} · {sel_seasons} · {sel_users} · {sel_hours}")
+    # Selection summary (everything below reflects this slice)
+    st.caption(
+        f"**Selection:** {date_range[0]} → {date_range[1]} · "
+        f"{'All seasons' if seasons is None or set(seasons)==set(['Winter','Spring','Summer','Autumn']) else ', '.join(seasons)} · "
+        f"{'All users' if (usertype in (None,'All')) else usertype.title()} · "
+        f"{'All day' if hour_range is None else f'{hour_range[0]:02d}:00–{hour_range[1]:02d}:00'}"
+    )
 
     show_cover(cover_path)
     st.caption("⚙️ Powered by NYC Citi Bike data • 365 days • Interactive visuals")
@@ -570,20 +828,18 @@ if page == "Intro":
     # --- Core KPIs (robust/defensible) ---
     KPIs = compute_core_kpis(df_f, daily_f)  # total_rides, avg_day, corr_tr
 
-    # Weather uplift: comfy (15–25°C) vs extreme (<5 or >30°C) — NaN-safe
+    # Weather uplift: comfy (15–25°C) vs extreme (<5 or >30°C)
     weather_uplift_pct = None
     if daily_f is not None and not daily_f.empty and "avg_temp_c" in daily_f.columns:
         d_nonnull = daily_f.dropna(subset=["avg_temp_c", "bike_rides_daily"]).copy()
-        if len(d_nonnull):
-            comfy_mask   = d_nonnull["avg_temp_c"].between(15, 25, inclusive="both")
-            extreme_mask = ~d_nonnull["avg_temp_c"].between(5, 30, inclusive="both")
-            comfy   = d_nonnull.loc[comfy_mask, "bike_rides_daily"].mean()
-            extreme = d_nonnull.loc[extreme_mask, "bike_rides_daily"].mean()
-            if pd.notnull(comfy) and pd.notnull(extreme) and extreme > 0:
+        if not d_nonnull.empty:
+            comfy   = d_nonnull.loc[d_nonnull["avg_temp_c"].between(15, 25, inclusive="both"), "bike_rides_daily"].mean()
+            extreme = d_nonnull.loc[~d_nonnull["avg_temp_c"].between(5, 30, inclusive="both"), "bike_rides_daily"].mean()
+            if pd.notnull(comfy) and pd.notnull(extreme) and extreme not in (0, np.nan):
                 weather_uplift_pct = (comfy - extreme) / extreme * 100.0
     weather_str = f"{weather_uplift_pct:+.0f}%" if weather_uplift_pct is not None else "—"
 
-    # Coverage: % of selected days with usable weather
+    # Coverage: % of selected days with usable weather (defensibility for weather KPIs)
     coverage = "—"
     if daily_f is not None and not daily_f.empty:
         if "avg_temp_c" in daily_f.columns:
@@ -592,7 +848,7 @@ if page == "Intro":
         else:
             coverage = "0%"
 
-    # Peak season (optional)
+    # Peak Season (optional text if you want to keep it handy)
     peak_value, peak_sub = "—", ""
     if "season" in df_f.columns and daily_f is not None and not daily_f.empty:
         tmp = daily_f.copy()
@@ -623,13 +879,14 @@ if page == "Intro":
     with cD:
         kpi_card("Weather Uplift", weather_str, "15–25°C vs extreme", "🌦️")
     with cE:
+        # Prefer Coverage for credibility; swap to Peak Season if you want
         kpi_card("Coverage", coverage, "Weather data availability", "🧩")
-        # kpi_card("Peak Season", peak_value, peak_sub, "🏆")
+        # kpi_card("Peak Season", peak_value, peak_sub, "🏆")  # ← alternative
 
-    # --- Mini trend strip (adds motion on Intro) ---
+    # --- Mini trend strip (adds motion right on the Intro) ---
     if daily_f is not None and not daily_f.empty and "avg_temp_c" in daily_f.columns:
         d = daily_f.sort_values("date").copy()
-        n = 14
+        n = 14  # gentle smoothing for both lines
         for col in ["bike_rides_daily", "avg_temp_c"]:
             d[f"{col}_roll"] = d[col].rolling(n, min_periods=max(2, n // 2), center=True).mean()
 
@@ -656,14 +913,17 @@ if page == "Intro":
             secondary_y=True,
         )
         fig_intro.update_layout(
-            height=280, margin=dict(l=20, r=20, t=30, b=0),
-            hovermode="x unified", showlegend=True,
+            height=280,
+            margin=dict(l=20, r=20, t=30, b=0),
+            hovermode="x unified",
+            showlegend=True,
             title="Trend overview (14-day smoother)"
         )
         fig_intro.update_yaxes(title_text="Rides", secondary_y=False)
         fig_intro.update_yaxes(title_text="Temp (°C)", secondary_y=True)
         st.plotly_chart(fig_intro, use_container_width=True)
 
+    # --- Sharpened “What you’ll find here” copy ---
     st.markdown("### What you’ll find here")
     c1, c2, c3, c4 = st.columns(4)
     c1.info("**Decision-ready KPIs**\n\nTotals, avg/day, and a defensible temp↔rides correlation.")
@@ -733,7 +993,7 @@ elif page == "Weather vs Bike Usage":
                 fig.add_trace(go.Bar(x=d["date"], y=d["precip_mm"], name="Precipitation (mm)",
                                      marker_color="rgba(100,100,120,0.35)", opacity=0.4), secondary_y=False)
 
-            # Comfort band cue behind rides (visual only)
+            # Gentle comfort band cue behind rides (visual only)
             if len(d):
                 fig.add_hrect(y0=float(d["bike_rides_daily"].min()), y1=float(d["bike_rides_daily"].max()),
                               line_width=0, fillcolor="rgba(34,197,94,0.05)", layer="below")
@@ -777,11 +1037,8 @@ elif page == "Weather vs Bike Usage":
                         "precip_bin": "Precipitation",
                         "wind_bin": "Wind",
                     }
-                    fig2 = _scatter_with_optional_ols(
-                        scatter_df,
-                        x=temp_col, y="bike_rides_daily", color=color_arg,
-                        labels=labels, opacity=0.85
-                    )
+                    fig2 = px.scatter(scatter_df, x=temp_col, y="bike_rides_daily", color=color_arg,
+                                      labels=labels, opacity=0.85, trendline="ols")
                     fig2.update_layout(height=520, title="Rides vs Temperature")
                     st.plotly_chart(fig2, use_container_width=True)
 
@@ -807,11 +1064,8 @@ elif page == "Weather vs Bike Usage":
                 if split_wknd and {"date","bike_rides_daily",temp_col}.issubset(d.columns):
                     dd = d.dropna(subset=[temp_col,"bike_rides_daily"]).copy()
                     dd["is_weekend"] = dd["date"].dt.weekday.isin([5,6]).map({True:"Weekend", False:"Weekday"})
-                    figsw = _scatter_with_optional_ols(
-                        dd,
-                        x=temp_col, y="bike_rides_daily", color="is_weekend", opacity=0.85,
-                        labels={temp_col: "Avg temp (°C)", "bike_rides_daily": "Bike rides", "is_weekend":"Day type"}
-                    )
+                    figsw = px.scatter(dd, x=temp_col, y="bike_rides_daily", color="is_weekend", opacity=0.85, trendline="ols",
+                                       labels={temp_col: "Avg temp (°C)", "bike_rides_daily": "Bike rides", "is_weekend":"Day type"})
                     figsw.update_layout(height=480, title="Rides vs Temp — Weekday vs Weekend")
                     st.plotly_chart(figsw, use_container_width=True)
 
@@ -819,10 +1073,9 @@ elif page == "Weather vs Bike Usage":
         with tab_dist:
             st.subheader("Distribution by rainfall")
             if "precip_bin" in d.columns and d["precip_bin"].notna().any():
-                order = sorted(d["precip_bin"].dropna().unique().tolist())
                 fig3 = px.box(d, x="precip_bin", y="bike_rides_daily",
                               labels={"precip_bin": "Precipitation", "bike_rides_daily": "Bike rides per day"},
-                              category_orders={"precip_bin": order})
+                              category_orders={"precip_bin": ["Low", "Medium", "High"]})
                 fig3.update_layout(height=420)
                 st.plotly_chart(fig3, use_container_width=True)
             elif "wet_day" in d.columns:
@@ -915,15 +1168,17 @@ elif page == "Weather vs Bike Usage":
                     b_lin, *_ = np.linalg.lstsq(Xtr, tr["bike_rides_daily"], rcond=None)
                     pred_lin = Xte @ b_lin
 
-                    # Enriched using helper (handles weekday dummies etc.)
-                    yhat_tr = yhat_te = None
+                    # Enriched: quadratic + rain + wind + weekday/month dummies (via helper)
+                    yhat_tr = None
+                    yhat_te = None
                     out_tr = deweather_fit_predict(tr)
                     out_te = deweather_fit_predict(te)
                     if out_tr is not None: yhat_tr = out_tr[0]
                     if out_te is not None: yhat_te = out_te[0]
 
-                    def MAE(y, yhat):
-                        y = np.asarray(y); yhat = np.asarray(yhat)
+                    def MAE(y, yhat): 
+                        y = np.asarray(y)
+                        yhat = np.asarray(yhat)
                         m = np.isfinite(y) & np.isfinite(yhat)
                         return float(np.mean(np.abs(y[m] - yhat[m]))) if m.any() else np.nan
 
@@ -938,13 +1193,14 @@ elif page == "Weather vs Bike Usage":
                 else:
                     st.info("Need ≥90 days with temperature to backtest.")
 
-            # Bring-your-own forecast
+            # Bring-your-own forecast (product hook)
             st.markdown("#### 🔮 Bring your own forecast (CSV)")
             up = st.file_uploader("Upload 7–14 day forecast CSV with columns: date, avg_temp_c, precip_mm, wind_kph", type=["csv"])
             if up is not None:
                 try:
                     df_fc = pd.read_csv(up, parse_dates=["date"])
                     df_fc = df_fc.reindex(columns=["date","avg_temp_c","precip_mm","wind_kph"])
+                    # Concatenate to share design columns with helper
                     d3 = d.dropna(subset=["avg_temp_c","bike_rides_daily"]).copy()
                     tmp = pd.concat(
                         [d3[["date","avg_temp_c","precip_mm","wind_kph","bike_rides_daily"]],
@@ -997,47 +1253,49 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
         with c4:
             log_speed = st.checkbox("Log X: Speed", value=False)
 
-        # ── Inlier masks + physical bounds (NaN-safe)
-        def _mask_and_bounds(col, lo, hi):
-            base = inlier_mask(df_f, col, lo=0.01, hi=0.995) if robust else pd.Series(True, index=df_f.index)
-            val = pd.to_numeric(df_f[col], errors="coerce")
-            rng = val.between(lo, hi, inclusive="both")
-            m = (base & rng).fillna(False)
-            return m
-
-        m_dur = _mask_and_bounds("duration_min", 0.5, 240)
-        m_dst = _mask_and_bounds("distance_km", 0.01, 30)
-        m_spd = _mask_and_bounds("speed_kmh", 0.5, 60)
+        # ── Inlier masks + physical bounds
+        m_dur = (inlier_mask(df_f, "duration_min", hi=0.995) if robust else pd.Series(True, index=df_f.index)) & \
+                df_f["duration_min"].between(0.5, 240, inclusive="both")
+        m_dst = (inlier_mask(df_f, "distance_km", hi=0.995) if robust else pd.Series(True, index=df_f.index)) & \
+                df_f["distance_km"].between(0.01, 30, inclusive="both")
+        m_spd = (inlier_mask(df_f, "speed_kmh", hi=0.995) if robust else pd.Series(True, index=df_f.index)) & \
+                df_f["speed_kmh"].between(0.5, 60, inclusive="both")
 
         clipped_dur = int((~m_dur).sum()); clipped_dst = int((~m_dst).sum()); clipped_spd = int((~m_spd).sum())
 
         # ===== Histograms (robust) =====
-        def _hist(series, xname, nbins=60, use_log=False):
-            s = pd.to_numeric(series, errors="coerce").dropna()
-            if len(s) == 0:
-                return None
-            if robust and not use_log and s.notna().sum() >= 10:
-                ql, qh = s.quantile([0.01, 0.995]).tolist()
-                rx = [float(ql), float(qh)] if np.isfinite(ql) and np.isfinite(qh) and ql < qh else None
-            else:
-                rx = None
-            fig = px.histogram(s, x=xname, nbins=nbins, labels={xname: xname.replace("_"," ").title()},
-                               log_x=use_log, range_x=rx)
-            fig.update_layout(height=420, margin=dict(l=10,r=10,t=40,b=10))
-            return fig
-
         cA, cB, cC = st.columns(3)
         with cA:
-            fig = _hist(df_f.loc[m_dur, "duration_min"], "duration_min", use_log=log_duration)
-            if fig is not None: st.plotly_chart(fig, use_container_width=True)
+            d = df_f.loc[m_dur, "duration_min"]
+            ql, qh = d.quantile([0.01, 0.995]).tolist()
+            fig = px.histogram(
+                d, x="duration_min", nbins=60, labels={"duration_min":"Duration (min)"},
+                log_x=log_duration, range_x=[ql, qh] if robust and not log_duration else None
+            )
+            fig.update_layout(height=420)
+            st.plotly_chart(fig, use_container_width=True)
             st.caption(f"Clipped rows (duration): {clipped_dur:,}")
+
         with cB:
-            fig = _hist(df_f.loc[m_dst, "distance_km"], "distance_km", use_log=log_distance)
-            if fig is not None: st.plotly_chart(fig, use_container_width=True)
+            d = df_f.loc[m_dst, "distance_km"]
+            ql, qh = d.quantile([0.01, 0.995]).tolist()
+            fig = px.histogram(
+                d, x="distance_km", nbins=60, labels={"distance_km":"Distance (km)"},
+                log_x=log_distance, range_x=[ql, qh] if robust and not log_distance else None
+            )
+            fig.update_layout(height=420)
+            st.plotly_chart(fig, use_container_width=True)
             st.caption(f"Clipped rows (distance): {clipped_dst:,}")
+
         with cC:
-            fig = _hist(df_f.loc[m_spd, "speed_kmh"], "speed_kmh", use_log=log_speed)
-            if fig is not None: st.plotly_chart(fig, use_container_width=True)
+            d = df_f.loc[m_spd, "speed_kmh"]
+            ql, qh = d.quantile([0.01, 0.995]).tolist()
+            fig = px.histogram(
+                d, x="speed_kmh", nbins=60, labels={"speed_kmh":"Speed (km/h)"},
+                log_x=log_speed, range_x=[ql, qh] if robust and not log_speed else None
+            )
+            fig.update_layout(height=420)
+            st.plotly_chart(fig, use_container_width=True)
             st.caption(f"Clipped rows (speed): {clipped_spd:,}")
 
         # ===== Distance vs duration — operating envelope (JSON-safe Scattergl) =====
@@ -1065,29 +1323,28 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
         fig2 = go.Figure()
 
         # Main cloud (WebGL)
-        if len(inliers):
-            fig2.add_trace(
-                go.Scattergl(
-                    x=x_vals,
-                    y=y_vals,
-                    mode="markers",
-                    name="Trips",
-                    marker=dict(
-                        size=6,
-                        opacity=0.85,
-                        color=c_vals,
-                        colorscale="Viridis",
-                        showscale=True,
-                        colorbar=dict(title="Speed (km/h)")
-                    ),
-                    hovertemplate=(
-                        "Distance: %{x:.2f} km<br>"
-                        "Duration: %{y:.1f} min<br>"
-                        "Speed: %{marker.color:.1f} km/h"
-                        "<extra></extra>"
-                    ),
-                )
+        fig2.add_trace(
+            go.Scattergl(
+                x=x_vals,
+                y=y_vals,
+                mode="markers",
+                name="Trips",
+                marker=dict(
+                    size=6,
+                    opacity=0.85,
+                    color=c_vals,
+                    colorscale="Viridis",
+                    showscale=True,
+                    colorbar=dict(title="Speed (km/h)")
+                ),
+                hovertemplate=(
+                    "Distance: %{x:.2f} km<br>"
+                    "Duration: %{y:.1f} min<br>"
+                    "Speed: %{marker.color:.1f} km/h"
+                    "<extra></extra>"
+                ),
             )
+        )
 
         # Faint outliers (fully sanitized too)
         outliers = df_f.loc[~inliers_mask_all, ["distance_km", "duration_min"]].copy()
@@ -1122,13 +1379,12 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
                     )
                 )
             # Tight axes (robust quantiles)
-            if inliers["distance_km"].notna().sum() >= 10 and inliers["duration_min"].notna().sum() >= 10:
-                xql, xqh = inliers["distance_km"].quantile([0.01, 0.995]).tolist()
-                yql, yqh = inliers["duration_min"].quantile([0.01, 0.995]).tolist()
-                if np.isfinite(xql) and np.isfinite(xqh) and xql < xqh:
-                    fig2.update_xaxes(range=[float(xql), float(xqh)])
-                if np.isfinite(yql) and np.isfinite(yqh) and yql < yqh:
-                    fig2.update_yaxes(range=[float(yql), float(yqh)])
+            xql, xqh = inliers["distance_km"].quantile([0.01, 0.995]).tolist()
+            yql, yqh = inliers["duration_min"].quantile([0.01, 0.995]).tolist()
+            if np.isfinite(xql) and np.isfinite(xqh) and xql < xqh:
+                fig2.update_xaxes(range=[float(xql), float(xqh)])
+            if np.isfinite(yql) and np.isfinite(yqh) and yql < yqh:
+                fig2.update_yaxes(range=[float(yql), float(yqh)])
 
         fig2.update_layout(
             height=560,
@@ -1148,14 +1404,15 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
         # Speed vs temperature
         with c1:
             if temp_ok:
-                dat = df_f[m_spd & df_f["avg_temp_c"].notna()].copy()
-                if len(dat) > 30000:
-                    dat = dat.sample(n=30000, random_state=4)
+                dat = df_f[m_spd & df_f["avg_temp_c"].notna()]
+                nmax = 30000
+                if len(dat) > nmax:
+                    dat = dat.sample(n=nmax, random_state=4)
                 figt = px.scatter(
                     dat, x="avg_temp_c", y="speed_kmh", opacity=0.7,
                     labels={"avg_temp_c":"Avg temperature (°C)", "speed_kmh":"Speed (km/h)"}
                 )
-                # Add fit (guard degenerate)
+                # Add fit
                 x_ = pd.to_numeric(dat["avg_temp_c"], errors="coerce")
                 y_ = pd.to_numeric(dat["speed_kmh"], errors="coerce")
                 ok = x_.notna() & y_.notna()
@@ -1172,9 +1429,10 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
         # Speed vs wind
         with c2:
             if wind_ok:
-                dat = df_f[m_spd & df_f["wind_kph"].notna()].copy()
-                if len(dat) > 30000:
-                    dat = dat.sample(n=30000, random_state=5)
+                dat = df_f[m_spd & df_f["wind_kph"].notna()]
+                nmax = 30000
+                if len(dat) > nmax:
+                    dat = dat.sample(n=nmax, random_state=5)
                 figw = px.scatter(
                     dat, x="wind_kph", y="speed_kmh", opacity=0.7,
                     labels={"wind_kph":"Wind (kph)", "speed_kmh":"Speed (km/h)"}
@@ -1196,9 +1454,10 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
         c3, c4 = st.columns(2)
         with c3:
             if temp_ok:
-                dat = df_f[m_dur & df_f["avg_temp_c"].notna()].copy()
-                if len(dat) > 30000:
-                    dat = dat.sample(n=30000, random_state=6)
+                dat = df_f[m_dur & df_f["avg_temp_c"].notna()]
+                nmax = 30000
+                if len(dat) > nmax:
+                    dat = dat.sample(n=nmax, random_state=6)
                 figdt = px.scatter(
                     dat, x="avg_temp_c", y="duration_min", opacity=0.6,
                     labels={"avg_temp_c":"Avg temperature (°C)", "duration_min":"Duration (min)"}
@@ -1213,11 +1472,13 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
                     figdt.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name="Linear fit", line=dict(dash="dash")))
                 figdt.update_layout(height=420, title="Duration vs Temperature")
                 st.plotly_chart(figdt, use_container_width=True)
+
         with c4:
             if temp_ok:
-                dat = df_f[m_dst & df_f["avg_temp_c"].notna()].copy()
-                if len(dat) > 30000:
-                    dat = dat.sample(n=30000, random_state=7)
+                dat = df_f[m_dst & df_f["avg_temp_c"].notna()]
+                nmax = 30000
+                if len(dat) > nmax:
+                    dat = dat.sample(n=nmax, random_state=7)
                 figDxT = px.scatter(
                     dat, x="avg_temp_c", y="distance_km", opacity=0.6,
                     labels={"avg_temp_c":"Avg temperature (°C)", "distance_km":"Distance (km)"}
@@ -1268,10 +1529,9 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
         cc1, cc2 = st.columns(2)
         with cc1:
             if has_precip_bin:
-                order = sorted(df_f.loc[df_f["precip_bin"].notna(), "precip_bin"].astype(str).unique().tolist())
                 figpb = px.box(
                     df_f[m_dur], x="precip_bin", y="duration_min",
-                    category_orders={"precip_bin": order},
+                    category_orders={"precip_bin":["Low","Medium","High"]},
                     labels={"precip_bin":"Precipitation", "duration_min":"Duration (min)"}
                 )
                 figpb.update_layout(height=420, title="Duration by Precipitation")
@@ -1287,10 +1547,9 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
 
         with cc2:
             if has_precip_bin:
-                order = sorted(df_f.loc[df_f["precip_bin"].notna(), "precip_bin"].astype(str).unique().tolist())
                 figpbs = px.box(
                     df_f[m_spd], x="precip_bin", y="speed_kmh",
-                    category_orders={"precip_bin": order},
+                    category_orders={"precip_bin":["Low","Medium","High"]},
                     labels={"precip_bin":"Precipitation", "speed_kmh":"Speed (km/h)"}
                 )
                 figpbs.update_layout(height=420, title="Speed by Precipitation")
@@ -1314,19 +1573,19 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
                     st.metric("Speed: Wet vs Dry", f"{(wet_spd-dry_spd)/dry_spd*100:+.1f}%")
         with k2:
             if wind_ok:
-                calm_spd  = df_f.loc[m_spd & (df_f["wind_kph"]<10),  "speed_kmh"].mean()
+                calm_spd = df_f.loc[m_spd & (df_f["wind_kph"]<10), "speed_kmh"].mean()
                 windy_spd = df_f.loc[m_spd & (df_f["wind_kph"]>=20), "speed_kmh"].mean()
                 if pd.notnull(calm_spd) and pd.notnull(windy_spd) and calm_spd>0:
                     st.metric("Speed: Windy (≥20) vs Calm (<10)", f"{(windy_spd-calm_spd)/calm_spd*100:+.1f}%")
         with k3:
             if temp_ok:
-                comfy   = df_f.loc[m_spd & df_f["avg_temp_c"].between(15,25, inclusive="both"), "speed_kmh"].mean()
-                extreme = df_f.loc[m_spd & (~df_f["avg_temp_c"].between(5,30, inclusive="both")), "speed_kmh"].mean()
-                if pd.notnull(comfy) and pd.notnull(extreme) and extreme>0:
-                    st.metric("Speed: Comfy (15–25°C) vs Extreme", f"{(comfy-extreme)/extreme*100:+.1f}%")
+                comfy = df_f.loc[m_spd & df_f["avg_temp_c"].between(15,25), "speed_kmh"].mean()
+                extreme = df_f.loc[m_spd & (~df_f["avg_temp_c"].between(5,30)), "speed_kmh"].mean()
+                if pd.notnull(comfy) and pd.notnull(extreme) and comfy != 0:
+                    st.metric("Speed: Comfy (15–25°C) vs Extreme", f"{(comfy-extreme)/comfy*100:+.1f}%")
         with k4:
             if has_precip_bin:
-                low_dur  = df_f.loc[m_dur & (df_f["precip_bin"]=="Low"),  "duration_min"].mean()
+                low_dur = df_f.loc[m_dur & (df_f["precip_bin"]=="Low"), "duration_min"].mean()
                 high_dur = df_f.loc[m_dur & (df_f["precip_bin"]=="High"), "duration_min"].mean()
                 if pd.notnull(low_dur) and pd.notnull(high_dur) and low_dur>0:
                     st.metric("Duration: High rain vs Low", f"{(high_dur-low_dur)/low_dur*100:+.1f}%")
@@ -1334,10 +1593,9 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
 elif page == "Member vs Casual Profiles":
     st.header("👥 Member vs Casual riding patterns")
 
-    # ─────────── Guards & clean member labels ───────────
-    missing = [c for c in ["member_type", "hour"] if c not in df_f.columns]
-    if missing:
-        st.info("This view needs columns: " + ", ".join(missing) + ". They’re engineered in load_data().")
+    # ─────────── Guards & clean member labels (ASCII only for charts) ───────────
+    if "member_type" not in df_f.columns or "hour" not in df_f.columns:
+        st.info("Need `member_type` and `started_at` (engineered `hour`).")
         st.stop()
 
     # Normalize member labels (ASCII-safe for Plotly)
@@ -1353,105 +1611,146 @@ elif page == "Member vs Casual Profiles":
         s = pd.to_numeric(s, errors="coerce")
         return float(s.median()) if s.notna().any() else float("nan")
 
-    # Per-group aggregates (only add cols that exist)
-    agg_spec = {"rides": ("member_type_clean", "size")}
-    if "duration_min" in df_mc.columns: agg_spec["duration_med"] = ("duration_min", _safe_median)
-    if "distance_km" in df_mc.columns:  agg_spec["distance_med"] = ("distance_km", _safe_median)
-    if "speed_kmh" in df_mc.columns:    agg_spec["speed_med"]    = ("speed_kmh", _safe_median)
-
-    grp = df_mc.groupby("member_type_clean", as_index=False).agg(**agg_spec)
-    m = grp.set_index("member_type_clean")
+    # Per-group aggregates
+    grp = df_mc.groupby("member_type_clean", as_index=False).agg(
+        rides=("member_type_clean", "size"),
+        duration_med=("duration_min", _safe_median) if "duration_min" in df_mc.columns else ("member_type_clean", "size"),
+        distance_med=("distance_km", _safe_median) if "distance_km" in df_mc.columns else ("member_type_clean", "size"),
+        speed_med=("speed_kmh", _safe_median) if "speed_kmh" in df_mc.columns else ("member_type_clean", "size"),
+    )
 
     # Rain penalty (wet vs dry) by group
-    rain_txt = "—"
+    rain_penalty = None
     if "wet_day" in df_mc.columns:
         dry = df_mc.loc[df_mc["wet_day"] == 0].groupby("member_type_clean").size()
         wet = df_mc.loc[df_mc["wet_day"] == 1].groupby("member_type_clean").size()
-        base = dry.replace(0, np.nan)
-        rain_penalty = ((wet / base) - 1.0) * 100.0
+        rain_penalty = (wet / dry - 1.0) * 100.0
         rain_penalty = rain_penalty.replace([np.inf, -np.inf], np.nan)
-        if {"Member", "Casual"}.issubset(rain_penalty.index):
-            rain_txt = f"M {rain_penalty['Member']:+.0f}% · C {rain_penalty['Casual']:+.0f}%"
 
     # Temperature preference gap (Casual − Member)
-    temp_txt = "—"
-    if "avg_temp_c" in df_mc.columns and df_mc["avg_temp_c"].notna().any():
+    temp_gap = None
+    if "avg_temp_c" in df_mc.columns:
         temp_meds = df_mc.groupby("member_type_clean")["avg_temp_c"].median()
-        if {"Member", "Casual"}.issubset(temp_meds.index):
+        if {"Member", "Casual"}.issubset(set(temp_meds.index)):
             temp_gap = float(temp_meds["Casual"] - temp_meds["Member"])
-            if np.isfinite(temp_gap):
-                temp_txt = f"{temp_gap:+.1f}°C"
 
-    # Member share
-    total_member = int(m["rides"].get("Member", 0)) if "rides" in m.columns else 0
-    total_casual = int(m["rides"].get("Casual", 0)) if "rides" in m.columns else 0
-    denom = max(total_member + total_casual, 1)
-    share_member = 100.0 * total_member / denom
+    # ─────────── At-a-glance (dark, uniform cards) ───────────
+    st.markdown("#### ✨ At-a-glance (selection)")
 
-    # Duration/Speed medians text (guard missing cols)
-    dur_txt = "—"
-    if "duration_med" in m.columns and {"Member", "Casual"}.issubset(m.index):
-        d_med_m = m.at["Member", "duration_med"]
-        d_med_c = m.at["Casual", "duration_med"]
-        if np.isfinite(d_med_m) and np.isfinite(d_med_c):
-            dur_txt = f"{d_med_m:.1f} vs {d_med_c:.1f} min"
-
-    spd_txt = "—"
-    if "speed_med" in m.columns and {"Member", "Casual"}.issubset(m.index):
-        s_med_m = m.at["Member", "speed_med"]
-        s_med_c = m.at["Casual", "speed_med"]
-        if np.isfinite(s_med_m) and np.isfinite(s_med_c):
-            spd_txt = f"{s_med_m:.1f} vs {s_med_c:.1f} km/h"
-
-    # ─────────── At-a-glance (uniform cards) ───────────
     st.markdown("""
     <style>
-    .kpi-box {background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);
-      border-radius: 16px; padding: 12px 14px; min-height: 132px; display:flex; flex-direction:column;
-      justify-content:space-between; box-shadow: 0 2px 10px rgba(0,0,0,0.25);}
-    .kpi-head {display:flex; align-items:center; gap:8px; color:#e5e7eb; font-weight:700; font-size:1.00rem; letter-spacing:.2px;}
+    /* container fixes so columns stay even height */
+    .kpi-row { display: flex; gap: 16px; }
+    .kpi-col { flex: 1 1 0; }
+
+    .kpi-box {
+        background: rgba(255,255,255,0.06); /* dark translucent card */
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 16px;
+        padding: 12px 14px;
+        min-height: 132px;  /* uniform height */
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+        transition: transform .15s ease, box-shadow .15s ease;
+    }
+    .kpi-box:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 16px rgba(0,0,0,0.35);
+    }
+    .kpi-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #e5e7eb; /* light text */
+        font-weight: 700;
+        font-size: 1.00rem; /* smaller so it fits */
+        letter-spacing: .2px;
+        opacity: 0.95;
+    }
     .kpi-emoji { font-size: 1.05rem; line-height: 1; }
-    .kpi-value {color:#f3f4f6; font-weight:800; font-size:1.06rem; margin:2px 0 0 0; line-height:1.1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-    .kpi-sub {color:#cbd5e1; font-size:0.82rem; line-height:1.25; margin-top:4px;}
+    .kpi-value {
+        color: #f3f4f6;
+        font-weight: 800;
+        font-size: 1.06rem; /* smaller than before for fit */
+        margin: 2px 0 0 0;
+        line-height: 1.1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .kpi-sub {
+        color: #cbd5e1;
+        font-size: 0.82rem;  /* smaller subcopy */
+        line-height: 1.25;
+        margin-top: 4px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
+    # Compute values
+    m = grp.set_index("member_type_clean")
+    total_member = int(m.loc["Member", "rides"]) if "Member" in m.index else 0
+    total_casual = int(m.loc["Casual", "rides"]) if "Casual" in m.index else 0
+    share_member = 100.0 * total_member / max(total_member + total_casual, 1)
+
+    d_med_m = m.at["Member", "duration_med"] if ("Member" in m.index and "duration_med" in m.columns) else np.nan
+    d_med_c = m.at["Casual", "duration_med"] if ("Casual" in m.index and "duration_med" in m.columns) else np.nan
+    dur_txt = f"{d_med_m:.1f} vs {d_med_c:.1f} min" if np.isfinite(d_med_m) and np.isfinite(d_med_c) else "—"
+
+    s_med_m = m.at["Member", "speed_med"] if ("Member" in m.index and "speed_med" in m.columns) else np.nan
+    s_med_c = m.at["Casual", "speed_med"] if ("Casual" in m.index and "speed_med" in m.columns) else np.nan
+    spd_txt = f"{s_med_m:.1f} vs {s_med_c:.1f} km/h" if np.isfinite(s_med_m) and np.isfinite(s_med_c) else "—"
+
+    rain_txt = "—"
+    if rain_penalty is not None and {"Member", "Casual"}.issubset(rain_penalty.index):
+        rain_txt = f"M {rain_penalty['Member']:+.0f}% · C {rain_penalty['Casual']:+.0f}%"
+
+    temp_txt = f"{temp_gap:+.1f}°C" if (temp_gap is not None and np.isfinite(temp_gap)) else "—"
+
+    # Render evenly-sized boxes (5 columns)
     ca, cb, cc, cd, ce = st.columns(5)
     with ca:
         st.markdown(f"""
         <div class="kpi-box">
             <div class="kpi-head"><span class="kpi-emoji">🧑‍💼</span>Member share</div>
             <div class="kpi-value">{share_member:.1f}%</div>
-            <div class="kpi-sub">of total rides (M / M+C)</div>
-        </div>""", unsafe_allow_html=True)
+            <div class="kpi-sub">of total rides</div>
+        </div>
+        """, unsafe_allow_html=True)
     with cb:
         st.markdown(f"""
         <div class="kpi-box">
             <div class="kpi-head"><span class="kpi-emoji">⏱️</span>Median duration</div>
             <div class="kpi-value">{dur_txt}</div>
             <div class="kpi-sub">Member (M) vs Casual (C)</div>
-        </div>""", unsafe_allow_html=True)
+        </div>
+        """, unsafe_allow_html=True)
     with cc:
         st.markdown(f"""
         <div class="kpi-box">
             <div class="kpi-head"><span class="kpi-emoji">🚴</span>Median speed</div>
             <div class="kpi-value">{spd_txt}</div>
             <div class="kpi-sub">Member (M) vs Casual (C)</div>
-        </div>""", unsafe_allow_html=True)
+        </div>
+        """, unsafe_allow_html=True)
     with cd:
         st.markdown(f"""
         <div class="kpi-box">
             <div class="kpi-head"><span class="kpi-emoji">🌧️</span>Rain penalty</div>
             <div class="kpi-value">{rain_txt}</div>
             <div class="kpi-sub">Wet vs dry (group-wise)</div>
-        </div>""", unsafe_allow_html=True)
+        </div>
+        """, unsafe_allow_html=True)
     with ce:
         st.markdown(f"""
         <div class="kpi-box">
             <div class="kpi-head"><span class="kpi-emoji">🌡️</span>Temp pref. gap</div>
             <div class="kpi-value">{temp_txt}</div>
             <div class="kpi-sub">Casual − Member (median °C)</div>
-        </div>""", unsafe_allow_html=True)
+        </div>
+        """, unsafe_allow_html=True)
 
     # ─────────── Tabs ───────────
     tab_beh, tab_wx, tab_perf, tab_station = st.tabs(
@@ -1461,9 +1760,7 @@ elif page == "Member vs Casual Profiles":
     # ======================= Behavior tab =======================
     with tab_beh:
         st.subheader("Daily rhythms")
-
         g_hour = df_mc.groupby(["member_type_clean", "hour"]).size().rename("rides").reset_index()
-        g_hour = g_hour.sort_values(["member_type_clean", "hour"])
         fig_h = px.line(
             g_hour, x="hour", y="rides", color="member_type_clean",
             labels={"hour": "Hour", "rides": "Rides", "member_type_clean": legend_member_title}
@@ -1475,9 +1772,6 @@ elif page == "Member vs Casual Profiles":
         if "weekday" in df_mc.columns:
             g_wd = df_mc.groupby(["member_type_clean", "weekday"]).size().rename("rides").reset_index()
             g_wd["weekday_name"] = g_wd["weekday"].map({0:"Mon",1:"Tue",2:"Wed",3:"Thu",4:"Fri",5:"Sat",6:"Sun"})
-            order = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
-            g_wd["weekday_name"] = pd.Categorical(g_wd["weekday_name"], categories=order, ordered=True)
-            g_wd = g_wd.sort_values(["member_type_clean", "weekday_name"])
             fig_w = px.line(
                 g_wd, x="weekday_name", y="rides", color="member_type_clean",
                 labels={"weekday_name": "Weekday", "rides": "Rides", "member_type_clean": legend_member_title}
@@ -1523,19 +1817,17 @@ elif page == "Member vs Casual Profiles":
             dat = df_mc.dropna(subset=["avg_temp_c"]).copy()
             dat["temp_band"] = pd.cut(dat["avg_temp_c"], tbins, labels=tlabs, include_lowest=True)
 
-            if "speed_kmh" in dat.columns and dat["speed_kmh"].notna().any():
-                gs = dat.groupby(["member_type_clean", "temp_band"])["speed_kmh"].median().reset_index()
-                figS = px.line(gs, x="temp_band", y="speed_kmh", color="member_type_clean", markers=True,
-                               labels={"temp_band":"Temp band (°C)", "speed_kmh":"Median speed"})
-                figS.update_layout(height=360, title="Median speed by temperature band")
-                st.plotly_chart(figS, use_container_width=True)
+            gs = dat.groupby(["member_type_clean", "temp_band"])["speed_kmh"].median().reset_index()
+            figS = px.line(gs, x="temp_band", y="speed_kmh", color="member_type_clean", markers=True,
+                           labels={"temp_band":"Temp band (°C)", "speed_kmh":"Median speed"})
+            figS.update_layout(height=360, title="Median speed by temperature band")
+            st.plotly_chart(figS, use_container_width=True)
 
-            if "duration_min" in dat.columns and dat["duration_min"].notna().any():
-                gd = dat.groupby(["member_type_clean", "temp_band"])["duration_min"].median().reset_index()
-                figD = px.line(gd, x="temp_band", y="duration_min", color="member_type_clean", markers=True,
-                               labels={"temp_band":"Temp band (°C)", "duration_min":"Median duration (min)"})
-                figD.update_layout(height=360, title="Median duration by temperature band")
-                st.plotly_chart(figD, use_container_width=True)
+            gd = dat.groupby(["member_type_clean", "temp_band"])["duration_min"].median().reset_index()
+            figD = px.line(gd, x="temp_band", y="duration_min", color="member_type_clean", markers=True,
+                           labels={"temp_band":"Temp band (°C)", "duration_min":"Median duration (min)"})
+            figD.update_layout(height=360, title="Median duration by temperature band")
+            st.plotly_chart(figD, use_container_width=True)
 
     # ======================= Stations tab =======================
     with tab_station:
@@ -1557,8 +1849,7 @@ elif page == "Member vs Casual Profiles":
                     with col: st.info(f"No {label} rides in this selection.")
                     continue
                 tot = float(by_group.loc[by_group["member_type_clean"] == label, "rides"].sum())
-                tot = max(tot, 1.0)
-                topk["p_group"] = topk["rides"] / tot
+                topk["p_group"] = topk["rides"] / max(tot, 1.0)
                 topk["lift"] = topk["p_group"] / topk["p_overall"].replace({0.0: np.nan})
                 topk["station_s"] = topk["start_station_name"].astype(str).str.slice(0, 28)
                 fig_b = px.bar(
