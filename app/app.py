@@ -82,6 +82,87 @@ def show_cover(cover_path: Path):
     except TypeError:
         st.image(str(cover_path), use_column_width=True,
                  caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com")
+def _bin_hour(h: pd.Series, bin_size: int) -> pd.Series:
+    # Bin 0-23 into 1/2/3-hr buckets
+    b = (h // bin_size) * bin_size
+    return b.clip(0, 23)
+
+def _weekday_name(idx: pd.Series) -> pd.Series:
+    return idx.map({0:"Mon",1:"Tue",2:"Wed",3:"Thu",4:"Fri",5:"Sat",6:"Sun"})
+
+def _make_heat_grid(df: pd.DataFrame,
+                    hour_col="hour",
+                    weekday_col="weekday",
+                    hour_bin: int = 1,
+                    scale: str = "Absolute") -> pd.DataFrame:
+    """
+    Returns a 7 x (24/hr_bin) grid with chosen scaling.
+    scale ∈ {"Absolute", "Row %", "Column %", "Z-score"}.
+    """
+    if hour_col not in df.columns or weekday_col not in df.columns:
+        return pd.DataFrame()
+
+    d = df[[hour_col, weekday_col]].dropna().copy()
+    d[hour_col] = _bin_hour(d[hour_col].astype(int), hour_bin)
+    # count rides
+    g = d.groupby([weekday_col, hour_col]).size().rename("rides").reset_index()
+    # build full matrix (fill missing cells with 0)
+    hours = list(range(0, 24, hour_bin))
+    mat = (g.pivot(index=weekday_col, columns=hour_col, values="rides")
+             .reindex(index=range(0,7), columns=hours)
+             .fillna(0))
+
+    if scale == "Absolute":
+        return mat
+
+    if scale == "Row %":
+        # Normalize by weekday (row)
+        row_sum = mat.sum(axis=1).replace(0, np.nan)
+        return (mat.div(row_sum, axis=0) * 100).fillna(0)
+
+    if scale == "Column %":
+        # Normalize by hour (column)
+        col_sum = mat.sum(axis=0).replace(0, np.nan)
+        return (mat.div(col_sum, axis=1) * 100).fillna(0)
+
+    if scale == "Z-score":
+        # Center/scale per row (weekday)
+        m = mat.mean(axis=1)
+        s = mat.std(axis=1).replace(0, np.nan)
+        return ((mat.sub(m, axis=0)).div(s, axis=0)).fillna(0)
+
+    return mat
+
+def _smooth_by_hour(mat: pd.DataFrame, k: int = 3) -> pd.DataFrame:
+    """Simple 1D moving-average smoothing across hours per weekday (window k, odd)."""
+    if mat.empty or k <= 1:
+        return mat
+    k = max(1, int(k))
+    if k % 2 == 0:
+        k += 1
+    out = mat.copy()
+    for i in out.index:
+        row = out.loc[i].values
+        s = pd.Series(row).rolling(k, center=True, min_periods=max(1, k//2)).mean().to_numpy()
+        out.loc[i] = s
+    return out
+
+def _add_peak_annotation(fig, mat: pd.DataFrame, title_suffix=""):
+    # find max cell; annotate
+    if mat.empty:
+        return fig
+    idx = np.unravel_index(np.nanargmax(mat.values), mat.shape)
+    r, c = idx[0], idx[1]
+    wk = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][r]
+    hr = mat.columns[c]
+    val = mat.iloc[r, c]
+    fig.add_annotation(
+        x=c, y=r, text=f"Peak: {wk} {hr:02d}:00<br>{val:,.0f}" if np.isfinite(val) else "Peak",
+        showarrow=True, arrowhead=2, ax=40, ay=-40, bgcolor="rgba(0,0,0,0.6)", font=dict(color="white", size=11)
+    )
+    if title_suffix:
+        fig.update_layout(title=fig.layout.title.text + title_suffix)
+    return fig
 
 # UI helpers (Intro hero + KPI cards)
 def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
@@ -1226,22 +1307,133 @@ elif page == "Pareto: Share of Rides":
 
 elif page == "Weekday × Hour Heatmap":
     st.header("⏰ Temporal load — weekday × start hour")
-    if "started_at" not in df_f.columns:
-        st.info("Need `started_at` timestamps in the sample to build this view.")
+
+    if not {"started_at","hour","weekday"}.issubset(df_f.columns):
+        st.info("Need `started_at` parsed into `hour` and `weekday` (done in load_data).")
     else:
-        dt = pd.to_datetime(df_f["started_at"], errors="coerce")
-        dfx = pd.DataFrame({"weekday": dt.dt.weekday, "hour": dt.dt.hour})
-        grid = (dfx.groupby(["weekday", "hour"]).size().rename("rides").reset_index())
-        mat = grid.pivot(index="weekday", columns="hour", values="rides").reindex(index=range(0,7), columns=range(0,24)).fillna(0)
-        fig = px.imshow(
-            mat, aspect="auto", origin="lower",
-            x=list(range(0,24)), y=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],
-            labels=dict(color="Rides")
-        )
-        friendly_axis(fig, x="Hour of day", y="Day of week", title="Rides by weekday and hour", colorbar="Rides")
-        fig.update_layout(height=580)
-        st.plotly_chart(fig, use_container_width=True)
-        st.markdown("**Tip:** identify commute peaks vs weekend leisure hours for targeted rebalancing.")
+        # ---- Controls ----
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1:
+            scale = st.selectbox("Scale", ["Absolute", "Row %", "Column %", "Z-score"], index=0,
+                                 help="Row % shows distribution within a weekday; Column % shows distribution within an hour.")
+        with c2:
+            hour_bin = st.slider("Hour bin size", 1, 3, 1, help="Group hours into 1/2/3-hour buckets.")
+        with c3:
+            smooth = st.checkbox("Smooth across hours", value=False, help="Moving average per weekday (visual only).")
+        with c4:
+            wk_preset = st.selectbox("Preset", ["All days", "Weekdays only", "Weekend only"], index=0)
+        with c5:
+            member_mode = st.selectbox("Member view", ["All", "Member only", "Casual only", "Facet by Member Type"], index=0)
+
+        # Apply day-of-week preset quickly (this stacks on your sidebar filter)
+        subset = df_f.copy()
+        if wk_preset == "Weekdays only":
+            subset = subset[subset["weekday"].isin([0,1,2,3,4])]
+        elif wk_preset == "Weekend only":
+            subset = subset[subset["weekday"].isin([5,6])]
+
+        # Member filter / facet
+        facet = False
+        if member_mode == "Member only" and "member_type" in subset.columns:
+            subset = subset[subset["member_type"].astype(str) == "member"]
+        elif member_mode == "Casual only" and "member_type" in subset.columns:
+            subset = subset[subset["member_type"].astype(str) == "casual"]
+        elif member_mode == "Facet by Member Type" and "member_type_display" in subset.columns:
+            facet = True
+
+        # Guard
+        if subset.empty:
+            st.info("No rows for current filters.")
+            st.stop()
+
+        # ---- Build main heatmap(s) ----
+        def _render_heat(mat: pd.DataFrame, title: str):
+            if mat.empty:
+                st.info("Not enough data to render heatmap.")
+                return
+            # Smoothing (optional)
+            if smooth:
+                mat = _smooth_by_hour(mat, k=3)
+
+            # Relabel Y-axis to weekday names
+            mat_display = mat.copy()
+            mat_display.index = _weekday_name(mat_display.index)
+
+            # Imshow
+            fig = px.imshow(
+                mat_display,
+                aspect="auto", origin="lower",
+                labels=dict(x="Hour of day", y="Day of week", color=("Value" if scale=="Absolute" else scale)),
+                text_auto=False, color_continuous_scale="Turbo" if scale=="Z-score" else "Viridis"
+            )
+
+            # Ticks: show real hour values (bin centers)
+            fig.update_xaxes(
+                tickmode="array",
+                tickvals=list(range(len(mat.columns))),
+                ticktext=[f"{h:02d}:00" for h in mat.columns]
+            )
+            fig.update_yaxes(
+                tickmode="array",
+                tickvals=list(range(len(mat.index))),
+                ticktext=mat_display.index.tolist()
+            )
+            fig.update_layout(height=600, title=title, margin=dict(l=20, r=20, t=50, b=50))
+
+            # Hover with raw value and (if % scale) show formatted %
+            hover = "<b>%{y}</b> @ <b>%{x}</b><br>Value: %{z}"
+            if scale in ("Row %","Column %"):
+                hover = "<b>%{y}</b> @ <b>%{x}</b><br>Share: %{z:.1f}%"
+            fig.update_traces(hovertemplate=hover)
+
+            # Peak annotation (only for Absolute / Row % to avoid odd Z-peak)
+            if scale in ("Absolute","Row %"):
+                fig = _add_peak_annotation(fig, mat)
+
+            st.plotly_chart(fig, use_container_width=True)
+
+        if facet:
+            # Two panels: Member vs Casual
+            cL, cR = st.columns(2)
+            for label, col in [("Member 🧑‍💼", cL), ("Casual 🚲", cR)]:
+                _sub = subset[subset["member_type"].astype(str).eq("member" if "Member" in label else "casual")]
+                mat = _make_heat_grid(_sub, hour_bin=hour_bin, scale=scale)
+                with col:
+                    _render_heat(mat, f"Weekday × Hour — {label}")
+        else:
+            mat = _make_heat_grid(subset, hour_bin=hour_bin, scale=scale)
+            _render_heat(mat, "Weekday × Hour — All riders")
+
+        # ---- Marginal profiles (always useful) ----
+        st.subheader("Marginal profiles")
+        grid_all = _make_heat_grid(subset, hour_bin=hour_bin, scale="Absolute")
+        if not grid_all.empty:
+            # Hourly profile
+            hourly = grid_all.sum(axis=0).rename("rides").reset_index().rename(columns={"index":"hour"})
+            hourly["hour"] = hourly["hour"].astype(int)
+            f1 = px.line(hourly, x="hour", y="rides", markers=True, labels={"hour":"Hour of day","rides":"Rides"})
+            f1.update_layout(height=300, title="Hourly total rides")
+            st.plotly_chart(f1, use_container_width=True)
+
+            # Weekday profile
+            weekday = grid_all.sum(axis=1).rename("rides").reset_index().rename(columns={0:"weekday"})
+            weekday["weekday_name"] = _weekday_name(weekday["weekday"])
+            f2 = px.bar(weekday, x="weekday_name", y="rides", labels={"weekday_name":"Weekday","rides":"Rides"})
+            f2.update_layout(height=300, title="Weekday total rides")
+            st.plotly_chart(f2, use_container_width=True)
+
+        # ---- Wet vs Dry comparison (if available) ----
+        if "wet_day" in subset.columns and subset["wet_day"].notna().any():
+            st.subheader("Wet vs Dry comparison")
+            cA, cB = st.columns(2)
+            dry = subset[subset["wet_day"] == 0]
+            wet = subset[subset["wet_day"] == 1]
+            mat_dry = _make_heat_grid(dry, hour_bin=hour_bin, scale=scale)
+            mat_wet = _make_heat_grid(wet, hour_bin=hour_bin, scale=scale)
+            with cA: _render_heat(mat_dry, "Dry days")
+            with cB: _render_heat(mat_wet, "Wet days")
+
+        st.caption("Tips: try Row % to see *within-day* timing; Column % to see which days dominate each hour; Z-score to highlight anomalies.")
 
 elif page == "Recommendations":
     st.header("🚀 Conclusion & Recommendations")
