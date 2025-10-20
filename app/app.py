@@ -716,7 +716,7 @@ elif page == "Station Imbalance (In vs Out)":
                 }).astype(object)  # keep as list objects for pydeck
 
                 # radius scale: 60 m base + 35 * sqrt(|Δ|); tweak scale if needed
-                scale = st.slider("Map bubble scale", 10, 100, 35)
+                scale = st.slider("Map bubble scale", 10, 50, 15)
                 m["radius"] = (60 + scale * np.sqrt(m["imbalance"].abs().clip(lower=1))).astype(float)
                 tooltip = {
                     "html": "<b>{station}</b><br>IN: {in}<br>OUT: {out}<br>&Delta;: {imbalance}",
