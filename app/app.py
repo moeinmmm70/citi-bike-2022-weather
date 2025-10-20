@@ -602,18 +602,20 @@ elif page == "Trip Flows Map":
 
     # ---------- Where to look for presets ----------
     ROOT = Path(repo_root) if "repo_root" in globals() else Path.cwd()
-    preset_dirs = [                             
-        ROOT / "reports" / "map"
-    ]
-    preset_files = []
-    for d in preset_dirs:
-        if d.exists():
-            preset_files.extend(sorted(d.glob("*.json")))
+    preset_dir = ROOT / "reports" / "map"
+
+    if not preset_dir.exists():
+        st.error(f"Preset folder not found: {preset_dir}")
+        st.stop()
+
+    preset_files = sorted(preset_dir.glob("*.json"))
     presets = {p.stem: p for p in preset_files}
 
     if not presets:
-        st.error("No Kepler presets found. Put JSON files in `map/` or `data/reports/map(/presets)/`.")
+        st.error("No Kepler presets found in reports/map/.")
         st.stop()
+
+    st.caption("✅ Found map presets: " + ", ".join(p.name for p in preset_files))
 
     # ---------- Kepler map preset selector ----------
     colA, colB = st.columns([1.2, 2.3])
