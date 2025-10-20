@@ -743,25 +743,31 @@ elif page == "Trip Flows Map":
         st.info("Preset notes:\n- " + "\n- ".join(preset_notes))
 
     # ---------- Render Kepler with the selected map preset ----------
-    if _KEPLER_OK:
+if _KEPLER_OK:
+    # Live interactive Kepler rendering
     data_dict = {"trips": df_f}  # must match the dataId normalized in the config
     m = KeplerGl(height=900, data=data_dict, config=cfg)
     keplergl_static(m)
+
 else:
+    # Fallback: static HTML export (so app doesn't crash on missing package)
     st.warning(
-        "Kepler live rendering is unavailable because the Kepler packages aren’t installed.\n\n"
+        "⚠️ Kepler live rendering is unavailable because the required packages aren't installed.\n\n"
         f"Import error: `{_KEPLER_ERR}`\n\n"
-        "▶ Add to your `app/requirements.txt`:\n"
-        "    keplergl==0.3.2\n"
-        "    streamlit-keplergl==0.3.1\n\n"
-        "Falling back to the static HTML export below."
+        "To enable presets, add these to your `app/requirements.txt`:\n\n"
+        "```\n"
+        "keplergl==0.3.2\n"
+        "streamlit-keplergl==0.3.1\n"
+        "```\n\n"
+        "For now, showing the static exported map below."
     )
-    # Fallback: show your previously exported HTML map
+
     path_to_html = None
     for p in MAP_HTMLS:
         if p.exists():
             path_to_html = p
             break
+
     if path_to_html:
         try:
             html_data = Path(path_to_html).read_text(encoding="utf-8")
@@ -770,7 +776,7 @@ else:
             st.error(f"Failed to load map HTML: {e}")
     else:
         st.info(
-            "Kepler.gl HTML not found.\n\nPlace one of:\n"
+            "No Kepler.gl HTML found.\n\nExpected at one of:\n"
             "- `reports/map/citibike_trip_flows_2022.html`\n"
             "- `reports/map/NYC_Bike_Trips_Aggregated.html`"
         )
