@@ -170,65 +170,69 @@ def _haversine_km(lat1, lon1, lat2, lon2):
     return 2*R*np.arcsin(np.sqrt(a))
 
 @st.cache_data
+@st.cache_data
 def load_data(path: Path, _sig: float | None = None) -> pd.DataFrame:
     df = pd.read_csv(path, low_memory=False)
 
-# ── Enrich with full daily weather if available
-wx_path = Path("data/processed/nyc_weather_2022_daily_full.csv")
-if wx_path.exists():
-    wx = pd.read_csv(wx_path, parse_dates=["date"])
-    keep_cols = [c for c in wx.columns if c in [
-        "date","avg_temp_c","tmin_c","tmax_c",
-        "precip_mm","snow_mm","snow_depth_mm",
-        "wind_mps","wind_kph","gust_mps","gust_kph",
-        "wet_day","precip_bin","wind_bin"
-    ] or c.startswith("wt")]
-    wx = wx[keep_cols].copy()
-    if "date" in df.columns:
-        df = df.merge(wx, on="date", how="left")
-        
-    # Parse timestamps
+    # ── Parse timestamps first
     for col in ["date", "started_at", "ended_at"]:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce")
 
-    # Ensure date exists
+    # Ensure 'date' exists
     if "date" not in df.columns and "started_at" in df.columns:
-        df["date"] = df["started_at"].dt.floor("D")
+        df["date"] = pd.to_datetime(df["started_at"], errors="coerce").dt.floor("D")
 
-    # Season if missing
+    # ── Enrich with full daily weather if available (merge on 'date')
+    wx_path = Path("data/processed/nyc_weather_2022_daily_full.csv")
+    if wx_path.exists() and "date" in df.columns:
+        wx = pd.read_csv(wx_path, parse_dates=["date"])
+        keep_cols = [c for c in wx.columns if c in [
+            "date","avg_temp_c","tmin_c","tmax_c",
+            "precip_mm","snow_mm","snow_depth_mm",
+            "wind_mps","wind_kph","gust_mps","gust_kph",
+            "wet_day","precip_bin","wind_bin"
+        ] or c.startswith("wt")]
+        wx = wx[keep_cols].copy()
+        df = df.merge(wx, on="date", how="left")
+
+    # ── Season if missing
     if "season" not in df.columns and "date" in df.columns:
         def season_from_month(m):
-            if m in (12,1,2): return "Winter"
-            if m in (3,4,5):  return "Spring"
-            if m in (6,7,8):  return "Summer"
+            if m in (12, 1, 2):  return "Winter"
+            if m in (3, 4, 5):   return "Spring"
+            if m in (6, 7, 8):   return "Summer"
             return "Autumn"
         df["season"] = df["date"].dt.month.map(season_from_month).astype("category")
 
-    # Trip metrics
+    # ── Trip metrics
     if {"started_at","ended_at"}.issubset(df.columns):
         dur = (df["ended_at"] - df["started_at"]).dt.total_seconds() / 60.0
         df["duration_min"] = dur.clip(lower=0)
 
     if {"start_lat","start_lng","end_lat","end_lng"}.issubset(df.columns):
-        df["distance_km"] = _haversine_km(df["start_lat"], df["start_lng"],
-                                          df["end_lat"],   df["end_lng"]).astype(float)
-    if "duration_min" in df.columns and "distance_km" in df.columns:
-        df["speed_kmh"] = (df["distance_km"] / (df["duration_min"]/60)).replace([np.inf,-np.inf], np.nan).clip(upper=60)
+        df["distance_km"] = _haversine_km(
+            df["start_lat"], df["start_lng"], df["end_lat"], df["end_lng"]
+        ).astype(float)
 
-    # Temporal fields
+    if "duration_min" in df.columns and "distance_km" in df.columns:
+        df["speed_kmh"] = (
+            df["distance_km"] / (df["duration_min"] / 60.0)
+        ).replace([np.inf, -np.inf], np.nan).clip(upper=60)
+
+    # ── Temporal fields
     if "started_at" in df.columns:
         ts = df["started_at"]
         df["hour"]    = ts.dt.hour
         df["weekday"] = ts.dt.weekday
         df["month"]   = ts.dt.to_period("M").dt.to_timestamp()
 
-    # Categories for perf
+    # ── Categories for perf
     for c in ["start_station_name","end_station_name","member_type","rideable_type","season"]:
         if c in df.columns:
             df[c] = df[c].astype("category")
 
-    # Pretty legend text for member_type
+    # ── Pretty legend text for member_type
     if "member_type" in df.columns:
         df["member_type_display"] = (
             df["member_type"].astype(str)
