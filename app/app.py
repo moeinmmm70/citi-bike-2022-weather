@@ -564,22 +564,6 @@ if "weekday" in df.columns:
     weekdays = st.sidebar.multiselect("Weekday(s)", weekday_names, default=weekday_names)
 
 st.sidebar.markdown("---")
-page = st.sidebar.selectbox(
-    "📑 Analysis page",
-    [
-        "Intro",
-        "Weather vs Bike Usage",
-        "Trip Metrics (Duration • Distance • Speed)",     
-        "Member vs Casual Profiles",                      
-        "OD Flows — Sankey + Map",
-        "OD Matrix — Top Origins × Dest",
-        "Station Popularity",
-        "Station Imbalance (In vs Out)",                  
-        "Pareto: Share of Rides",
-        "Weekday × Hour Heatmap",
-        "Recommendations",
-    ],
-)
 
 # ── URL state: read (on load) and write (after filters) ──
 def _qp_get():
