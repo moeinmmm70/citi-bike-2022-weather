@@ -1961,10 +1961,9 @@ elif page == "OD Flows — Sankey + Map":
         link_colors = None
         if member_split and "member_type_display" in edges_vis.columns:
             cmap = {"Member 🧑‍💼": "rgba(34,197,94,0.60)", "Casual 🚲": "rgba(37,99,235,0.60)"}
-            edges_vis["mt_simple"] = edges_vis["member_type_display"].astype(str).map(
-                {"Member 🧑‍💼": "Member", "Casual 🚲": "Casual"}
-            ).fillna("All")
-            link_colors = edges_vis["member_type_display"].astype(object).map(cmap).fillna("rgba(180,180,180,0.45)").tolist()
+            # Categorical-safe conversion to list (avoid .map on categorical series)
+            mt_vals = edges_vis["member_type_display"].to_numpy()
+            link_colors = [cmap.get(str(v), "rgba(180,180,180,0.45)") if not pd.isna(v) else "rgba(180,180,180,0.45)" for v in mt_vals]
 
         sankey = go.Sankey(
             node=dict(
@@ -2021,7 +2020,7 @@ elif page == "OD Flows — Sankey + Map":
             scale = st.slider("Arc width scale", 1, 30, 10)
             geo["width"] = (scale * (np.sqrt(geo["rides"]) / np.sqrt(vmax if vmax > 0 else 1))).clip(0.5, 14)
 
-            # ✅ Fixed: build per-row RGBA lists without using fillna(list)
+            # ✅ Robust color mapping that avoids Categorical.apply
             if member_split and "member_type_display" in geo.columns:
                 _cmap = {
                     "Member 🧑‍💼": [34, 197, 94, 200],
@@ -2032,12 +2031,14 @@ elif page == "OD Flows — Sankey + Map":
                         return [160, 160, 160, 200]
                     return _cmap.get(str(v), [160, 160, 160, 200])
 
-                    # Use NumPy values to avoid pandas' categorical mapping path
-                    _vals = geo["member_type_display"].to_numpy()
-                    geo["color"] = [_mk_color(v) for v in _vals]
-                else:
-                    geo["color"] = [[37, 99, 235, 200]] * len(geo)
-            
+                _vals = geo["member_type_display"].to_numpy()
+                geo["color"] = [_mk_color(v) for v in _vals]  # list of RGBA lists
+            else:
+                geo["color"] = [[37, 99, 235, 200]] * len(geo)
+
+            geo["start_s"] = ascii_safe(geo["start_station_name"])
+            geo["end_s"] = ascii_safe(geo["end_station_name"])
+
             layer = pdk.Layer(
                 "ArcLayer",
                 data=geo,
