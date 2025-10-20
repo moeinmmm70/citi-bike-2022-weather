@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.io as pio
 from urllib.parse import quote, unquote
+import unicodedata
 try:
     from sklearn.linear_model import LinearRegression
 except Exception:
@@ -361,6 +362,13 @@ def deweather_fit_predict(df_in: pd.DataFrame):
     resid_pct = 100.0 * (resid / denom)
 
     return yhat_all, resid_pct, coefs
+
+def _slug(s: str) -> str:
+    if s is None:
+        return ""
+    # strip emojis/accents, collapse spaces, lowercase
+    s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode()
+    return " ".join(s.split()).lower()
 
 # UI helpers (Intro hero + KPI cards)
 def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
@@ -723,7 +731,7 @@ PAGES = [
     "OD Flows — Sankey + Map",
     "OD Matrix — Top Origins × Dest",
     "Station Popularity",
-    " (In vs Out)",
+    "Station Imbalance (In vs Out)",
     "Pareto: Share of Rides",
     "Weekday × Hour Heatmap",
     "Recommendations",
