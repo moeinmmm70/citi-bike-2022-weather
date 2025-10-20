@@ -865,6 +865,7 @@ elif page == "Trip Flows Map":
     st.caption(f"ℹ️ Preset “{preset}” shapes both OD and imbalance widgets. "
                f"Kepler map is static — rebuild or use pydeck for dynamic filtering.")
 
+
 elif page == "Weekday × Hour Heatmap":
     st.header("⏰ Temporal load — weekday × start hour")
     if "started_at" not in df_f.columns:
