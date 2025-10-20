@@ -237,39 +237,6 @@ def _cached_edges(df: pd.DataFrame,
         st.warning(f"Edge build failed: {e}")
         return pd.DataFrame(columns=["start_station_name","end_station_name","rides"])
 
-    # Count rides robustly (works even if ride_id missing)
-    g = df.groupby(gb_cols).size().rename("rides").reset_index()
-
-    # Optional: add medians if available
-    if "distance_km" in df.columns:
-        med_dist = df.groupby(gb_cols)["distance_km"].median().reset_index(name="med_distance_km")
-        g = g.merge(med_dist, on=gb_cols, how="left")
-    if "duration_min" in df.columns:
-        med_dur = df.groupby(gb_cols)["duration_min"].median().reset_index(name="med_duration_min")
-        g = g.merge(med_dur, on=gb_cols, how="left")
-
-    # Drop self-loops safely (cast to string to avoid categorical-compare error)
-    if drop_self_loops:
-        s = g["start_station_name"].astype(str)
-        e = g["end_station_name"].astype(str)
-        g = g[s != e]
-
-    # Threshold early
-    g = g[g["rides"] >= int(min_rides)]
-
-    # Top-k selection
-    if per_origin:
-        by = ["start_station_name"]
-        if member_split and "member_type_display" in g.columns:
-            by.append("member_type_display")
-        g = (g.sort_values("rides", ascending=False)
-               .groupby(by, as_index=False)
-               .head(topk))
-    else:
-        g = g.sort_values("rides", ascending=False).head(topk)
-
-    return g
-
 def _matrix_from_edges(edges: pd.DataFrame, member_split: bool) -> pd.DataFrame:
     if edges.empty: return pd.DataFrame()
     base = edges.copy()
@@ -366,8 +333,7 @@ def _haversine_km(lat1, lon1, lat2, lon2):
     dlon = lon2 - lon1
     a = np.sin(dlat/2.0)**2 + np.cos(lat1)*np.cos(lat2)*np.sin(dlon/2.0)**2
     return 2*R*np.arcsin(np.sqrt(a))
-
-@st.cache_data
+    
 @st.cache_data
 def load_data(path: Path, _sig: float | None = None) -> pd.DataFrame:
     df = pd.read_csv(path, low_memory=False)
