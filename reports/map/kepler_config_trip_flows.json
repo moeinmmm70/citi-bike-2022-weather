@@ -1,1 +1,74 @@
-{}
+{
+  "version": "v1",
+  "config": {
+    "visState": {
+      "layers": [
+        {
+          "id": "arc_layer_flows",
+          "type": "arc",
+          "config": {
+            "dataId": "Trip Flows",
+            "label": "Station-to-Station Trips",
+            "color": [
+              66,
+              135,
+              245
+            ],
+            "columns": {
+              "lat0": "start_lat",
+              "lng0": "start_lng",
+              "lat1": "end_lat",
+              "lng1": "end_lng"
+            },
+            "isVisible": true,
+            "visConfig": {
+              "opacity": 0.7,
+              "thickness": 2.5,
+              "colorRange": {
+                "name": "Uber Viz Diverging 1.5",
+                "type": "diverging",
+                "category": "Uber",
+                "colors": [
+                  "#b2182b",
+                  "#ef8a62",
+                  "#fddbc7",
+                  "#d1e5f0",
+                  "#67a9cf",
+                  "#2166ac"
+                ]
+              },
+              "sizeRange": [
+                1,
+                30
+              ],
+              "targetColor": [
+                255,
+                255,
+                255
+              ]
+            }
+          },
+          "visualChannels": {
+            "sizeField": {
+              "name": "trips",
+              "type": "integer"
+            },
+            "sizeScale": "sqrt",
+            "colorField": {
+              "name": "trips",
+              "type": "integer"
+            },
+            "colorScale": "quantile"
+          }
+        }
+      ]
+    },
+    "mapState": {
+      "latitude": 40.73,
+      "longitude": -73.97,
+      "zoom": 11.3,
+      "pitch": 30,
+      "bearing": 0
+    }
+  }
+}
