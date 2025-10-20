@@ -2079,28 +2079,44 @@ elif page == "OD Flows — Sankey + Map":
     st.download_button("Download OD edges (CSV)", csv_bytes, "od_edges_current_view.csv", "text/csv")
 
 # ───────────────────────── OD Matrix — Top Origins × Destinations ─────────────────────────
-elif page == "OD Matrix — Top origins × destinations":
+# ───────────────────────── OD Matrix (Top origins × destinations) ─────────────────────────
+elif (
+    page.startswith("OD Matrix")  # robust to tiny label changes
+    or page == "OD Matrix — Top origins × destinations"
+    or page == "OD Matrix - Top origins × destinations"
+):
     st.header("🧮 OD Matrix — Top origins × destinations")
 
+    # ── Required columns ──
     need = {"start_station_name", "end_station_name"}
     if not need.issubset(df_f.columns):
         st.info("Need start and end station names.")
         st.stop()
+
+    # ── Ensure a uniform member type column if available ──
+    mt_col = None
+    if "member_type_display" in df_f.columns:
+        mt_col = "member_type_display"
+    elif "member_type" in df_f.columns:
+        # Map raw values to pretty labels if needed
+        _map = {"member": "Member 🧑‍💼", "casual": "Casual 🚲", "Member": "Member 🧑‍💼", "Casual": "Casual 🚲"}
+        df_f["member_type_display"] = df_f["member_type"].astype(str).map(_map).fillna(df_f["member_type"].astype(str))
+        mt_col = "member_type_display"
 
     # ───────── Controls ─────────
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         mode = st.selectbox("Time slice", ["All", "Weekday", "Weekend", "AM (06–11)", "PM (16–20)"], index=0)
     with c2:
-        member_split = st.checkbox("Split by member type", value=("member_type_display" in df_f.columns))
+        member_split = st.checkbox("Split by member type", value=(mt_col is not None))
     with c3:
-        top_orig = st.slider("Top origins", 10, 120, 40, 5)
+        top_orig = st.slider("Top origins", 10, 150, 40, 5)
     with c4:
-        top_dest = st.slider("Top destinations", 10, 120, 40, 5)
+        top_dest = st.slider("Top destinations", 10, 150, 40, 5)
 
     c5, c6, c7, c8 = st.columns(4)
     with c5:
-        min_rides = st.number_input("Min rides to include (pair)", min_value=1, max_value=500, value=3, step=1)
+        min_rides = st.number_input("Min rides to include (pair)", min_value=1, max_value=1000, value=3, step=1)
     with c6:
         norm = st.selectbox("Normalize", ["None", "Row (per origin)", "Column (per destination)"], index=0)
     with c7:
@@ -2108,53 +2124,53 @@ elif page == "OD Matrix — Top origins × destinations":
     with c8:
         log_scale = st.checkbox("Log color scale", value=False, help="√(counts + 1) for smoother contrast")
 
-    # ───────── Prep subset ─────────
+    # ───────── Subset ─────────
     subset = _time_slice(df_f, mode).copy()
-
-    # Safety: ensure strings (avoid categorical apply pitfalls)
-    for col in ["start_station_name", "end_station_name"]:
-        if col in subset.columns:
-            subset[col] = subset[col].astype(str)
-
+    # Safety: work with strings (avoid categorical pitfalls)
+    subset["start_station_name"] = subset["start_station_name"].astype(str)
+    subset["end_station_name"] = subset["end_station_name"].astype(str)
     if subset.empty:
         st.info("No data in this time slice.")
         st.stop()
 
-    # Helper: build one matrix (optionally for a filtered member segment)
-    def build_matrix(df_src: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
-        """Return (pivot, pairs_table, origin_totals, dest_totals)"""
-
-        # First, compute totals per station to pick top sets quickly
+    # ───────── Builder ─────────
+    def build_matrix(df_src: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, dict]:
+        dbg = {}
+        # Totals for selecting top sets
         o_tot = df_src.groupby("start_station_name").size().sort_values(ascending=False)
         d_tot = df_src.groupby("end_station_name").size().sort_values(ascending=False)
+        dbg["origins_total_unique"] = int(o_tot.shape[0])
+        dbg["dests_total_unique"] = int(d_tot.shape[0])
 
-        # Pick top names
         o_keep = set(o_tot.head(int(top_orig)).index)
         d_keep = set(d_tot.head(int(top_dest)).index)
+        dbg["origins_kept"] = len(o_keep)
+        dbg["dests_kept"] = len(d_keep)
 
-        # Filter to those
         df2 = df_src[
-            df_src["start_station_name"].isin(o_keep)
-            & df_src["end_station_name"].isin(d_keep)
+            df_src["start_station_name"].isin(o_keep) & df_src["end_station_name"].isin(d_keep)
         ]
 
-        if df2.empty:
-            return pd.DataFrame(), pd.DataFrame(), o_tot, d_tot
+        dbg["pairs_rows_after_topN"] = int(df2.shape[0])
 
-        # Aggregate pairs
+        if df2.empty:
+            return pd.DataFrame(), pd.DataFrame(), o_tot, d_tot, dbg
+
         pairs = (
             df2.groupby(["start_station_name", "end_station_name"])
             .size()
             .rename("rides")
             .reset_index()
         )
+        dbg["unique_pairs"] = int(pairs.shape[0])
+
         if min_rides > 1:
             pairs = pairs[pairs["rides"] >= int(min_rides)]
+        dbg["pairs_after_minrides"] = int(pairs.shape[0])
 
         if pairs.empty:
-            return pd.DataFrame(), pd.DataFrame(), o_tot, d_tot
+            return pd.DataFrame(), pd.DataFrame(), o_tot, d_tot, dbg
 
-        # Pivot
         mat = pairs.pivot_table(
             index="start_station_name",
             columns="end_station_name",
@@ -2163,7 +2179,7 @@ elif page == "OD Matrix — Top origins × destinations":
             fill_value=0,
         )
 
-        # Optional normalization
+        # Normalization
         if norm == "Row (per origin)":
             denom = mat.sum(axis=1).replace(0, np.nan)
             mat = (mat.T / denom).T.fillna(0.0)
@@ -2179,41 +2195,35 @@ elif page == "OD Matrix — Top origins × destinations":
                 mat = mat.loc[mat.sum(axis=1).sort_values(ascending=False).index]
                 mat = mat[mat.sum(axis=0).sort_values(ascending=False).index]
             else:
-                # for normalized matrices, sort by raw o_tot/d_tot restricted to visible labels
                 _o = o_tot.reindex(mat.index).fillna(0).sort_values(ascending=False).index
                 _d = d_tot.reindex(mat.columns).fillna(0).sort_values(ascending=False).index
                 mat = mat.loc[_o, _d]
         elif sort_mode == "Clustered (if available)":
             try:
                 if (linkage is not None) and (leaves_list is not None) and mat.shape[0] > 2 and mat.shape[1] > 2:
-                    # cluster rows
                     rZ = linkage(mat.values, method="average", metric="euclidean")
-                    r_order = mat.index[leaves_list(rZ)]
-                    # cluster cols
                     cZ = linkage(mat.values.T, method="average", metric="euclidean")
-                    c_order = mat.columns[leaves_list(cZ)]
-                    mat = mat.loc[r_order, c_order]
+                    mat = mat.loc[mat.index[leaves_list(rZ)], mat.columns[leaves_list(cZ)]]
                 else:
-                    # fallback to totals
                     mat = mat.loc[mat.sum(axis=1).sort_values(ascending=False).index]
                     mat = mat[mat.sum(axis=0).sort_values(ascending=False).index]
             except Exception:
                 mat = mat.loc[mat.sum(axis=1).sort_values(ascending=False).index]
                 mat = mat[mat.sum(axis=0).sort_values(ascending=False).index]
 
-        return mat, pairs, o_tot, d_tot
+        dbg["matrix_shape"] = tuple(mat.shape)
+        return mat, pairs, o_tot, d_tot, dbg
 
-    # Render helper
+    # ───────── Heatmap ─────────
     def render_heatmap(mat: pd.DataFrame, title: str):
         if mat.empty:
-            st.info("Nothing to show with current filters. Try lowering **Min rides** or increasing top-N.")
+            st.info("Nothing to show with current filters. Try lowering **Min rides**, increasing **Top origins/destinations**, or switching order to **Alphabetical**.")
             return
 
         z = mat.values.astype(float)
         if log_scale and norm == "None":
             z = np.sqrt(z + 1.0)
 
-        # hover: show both value and share if normalized
         if norm == "None":
             hovertemplate = "Origin: %{y}<br>Destination: %{x}<br>Rides: %{z}<extra></extra>"
             colorbar_title = "rides" if not log_scale else "√(rides+1)"
@@ -2243,48 +2253,52 @@ elif page == "OD Matrix — Top origins × destinations":
         st.plotly_chart(fig, use_container_width=True)
 
     # ───────── Render (split or combined) ─────────
-    if member_split and "member_type_display" in subset.columns:
+    if member_split and (mt_col is not None) and (mt_col in subset.columns):
         tabs = st.tabs(["Member 🧑‍💼", "Casual 🚲", "All"])
         segments = [
-            ("Member 🧑‍💼", subset[subset["member_type_display"].astype(str) == "Member 🧑‍💼"]),
-            ("Casual 🚲", subset[subset["member_type_display"].astype(str) == "Casual 🚲"]),
+            ("Member 🧑‍💼", subset[subset[mt_col].astype(str) == "Member 🧑‍💼"]),
+            ("Casual 🚲", subset[subset[mt_col].astype(str) == "Casual 🚲"]),
             ("All", subset),
         ]
         for (label, seg_df), tab in zip(segments, tabs):
             with tab:
-                mat, pairs, o_tot, d_tot = build_matrix(seg_df)
+                mat, pairs, o_tot, d_tot, dbg = build_matrix(seg_df)
                 render_heatmap(mat, f"Top {mat.shape[0]} origins × Top {mat.shape[1]} destinations — {label}")
-                # Downloads + preview
-                with st.expander("Preview & Download"):
-                    st.dataframe(
-                        pairs.sort_values("rides", ascending=False).head(40),
-                        use_container_width=True
-                    )
-                    csv_pairs = pairs.to_csv(index=False).encode("utf-8")
-                    st.download_button(
-                        f"Download pairs ({label}) CSV",
-                        csv_pairs,
-                        f"od_pairs_{label.replace(' ', '_')}.csv",
-                        "text/csv",
-                        key=f"dl_pairs_{label}",
-                    )
-                    csv_mat = mat.reset_index().rename(columns={"start_station_name": "origin"}).to_csv(index=False).encode("utf-8")
-                    st.download_button(
-                        f"Download matrix ({label}) CSV",
-                        csv_mat,
-                        f"od_matrix_{label.replace(' ', '_')}.csv",
-                        "text/csv",
-                        key=f"dl_matrix_{label}",
-                    )
+
+                with st.expander("Diagnostics & Download"):
+                    # Quick reasons-why if empty
+                    st.write(dbg)
+                    if not pairs.empty:
+                        st.dataframe(pairs.sort_values("rides", ascending=False).head(40), use_container_width=True)
+                        st.download_button(
+                            f"Download pairs ({label}) CSV",
+                            pairs.to_csv(index=False).encode("utf-8"),
+                            f"od_pairs_{label.replace(' ', '_')}.csv",
+                            "text/csv",
+                            key=f"dl_pairs_{label}",
+                        )
+                        st.download_button(
+                            f"Download matrix ({label}) CSV",
+                            mat.reset_index().rename(columns={"start_station_name": "origin"}).to_csv(index=False).encode("utf-8"),
+                            f"od_matrix_{label.replace(' ', '_')}.csv",
+                            "text/csv",
+                            key=f"dl_matrix_{label}",
+                        )
     else:
-        mat, pairs, o_tot, d_tot = build_matrix(subset)
+        mat, pairs, o_tot, d_tot, dbg = build_matrix(subset)
         render_heatmap(mat, f"Top {mat.shape[0]} origins × Top {mat.shape[1]} destinations")
-        with st.expander("Preview & Download"):
-            st.dataframe(pairs.sort_values("rides", ascending=False).head(40), use_container_width=True)
-            csv_pairs = pairs.to_csv(index=False).encode("utf-8")
-            st.download_button("Download pairs CSV", csv_pairs, "od_pairs.csv", "text/csv")
-            csv_mat = mat.reset_index().rename(columns={"start_station_name": "origin"}).to_csv(index=False).encode("utf-8")
-            st.download_button("Download matrix CSV", csv_mat, "od_matrix.csv", "text/csv")
+
+        with st.expander("Diagnostics & Download"):
+            st.write(dbg)  # ← tells you exactly why it might be empty
+            if not pairs.empty:
+                st.dataframe(pairs.sort_values("rides", ascending=False).head(40), use_container_width=True)
+                st.download_button("Download pairs CSV", pairs.to_csv(index=False).encode("utf-8"), "od_pairs.csv", "text/csv")
+                st.download_button(
+                    "Download matrix CSV",
+                    mat.reset_index().rename(columns={"start_station_name": "origin"}).to_csv(index=False).encode("utf-8"),
+                    "od_matrix.csv",
+                    "text/csv",
+                )
 
 elif page == "Station Popularity":
     st.header("🚉 Most popular start stations")
