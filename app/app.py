@@ -1230,327 +1230,422 @@ elif page == "Weather vs Bike Usage":
 elif page == "Trip Metrics (Duration • Distance • Speed)":
     st.header("🚴 Trip metrics (robust view)")
 
-    need = {"duration_min","distance_km","speed_kmh"}
+    need = {"duration_min", "distance_km", "speed_kmh"}
     if not need.issubset(df_f.columns):
         st.info("Need duration, distance, and speed (engineered in load_data).")
     else:
         # ── Controls
-        c1, c2, c3, c4, c5 = st.columns(5)
+        c1, c2, c3, c4 = st.columns(4)
         with c1:
-            robust = st.checkbox("Robust clipping (99.5%)", value=True, help="Hide extreme outliers that crush the axes.")
+            robust = st.checkbox(
+                "Robust clipping (99.5%)",
+                value=True,
+                help="Hide extreme outliers that crush the axes. (Only for plotting.)",
+            )
         with c2:
             log_duration = st.checkbox("Log X: Duration", value=False)
         with c3:
             log_distance = st.checkbox("Log X: Distance", value=False)
         with c4:
             log_speed = st.checkbox("Log X: Speed", value=False)
-        with c5:
-            time_slice = st.selectbox("Commute slice", ["All day","AM peak (06–10)","PM peak (16–20)"], index=0)
 
-        # ── Optional AM/PM slice
-        sub = df_f.copy()
-        if time_slice == "AM peak (06–10)" and "hour" in sub.columns:
-            sub = sub[(sub["hour"] >= 6) & (sub["hour"] <= 10)]
-        elif time_slice == "PM peak (16–20)" and "hour" in sub.columns:
-            sub = sub[(sub["hour"] >= 16) & (sub["hour"] <= 20)]
+        # ── Inlier masks + physical bounds (plotting only)
+        def _mask_bounds(df: pd.DataFrame, col: str, lo, hi, clip_lo=None, clip_hi=None):
+            if col not in df.columns:
+                return pd.Series(True, index=df.index)
+            s = pd.to_numeric(df[col], errors="coerce")
+            if robust:
+                ql, qh = s.quantile([lo, hi])
+                m = s.between(ql, qh, inclusive="both")
+            else:
+                m = pd.Series(True, index=df.index)
+            if clip_lo is not None or clip_hi is not None:
+                m &= s.between(
+                    clip_lo if clip_lo is not None else -np.inf,
+                    clip_hi if clip_hi is not None else np.inf,
+                    inclusive="both",
+                )
+            return m
 
-        # ── Inlier masks + physical bounds
-        m_dur = (inlier_mask(sub, "duration_min", hi=0.995) if robust else pd.Series(True, index=sub.index)) & \
-                sub["duration_min"].between(0.5, 240, inclusive="both")
-        m_dst = (inlier_mask(sub, "distance_km", hi=0.995) if robust else pd.Series(True, index=sub.index)) & \
-                sub["distance_km"].between(0.01, 30, inclusive="both")
-        m_spd = (inlier_mask(sub, "speed_kmh", hi=0.995) if robust else pd.Series(True, index=sub.index)) & \
-                sub["speed_kmh"].between(0.5, 60, inclusive="both")
+        m_dur = _mask_bounds(df_f, "duration_min", 0.01, 0.995, 0.5, 240)
+        m_dst = _mask_bounds(df_f, "distance_km", 0.01, 0.995, 0.01, 30)
+        m_spd = _mask_bounds(df_f, "speed_kmh", 0.01, 0.995, 0.5, 60)
 
-        # ── KPI strip (robust, decision-grade)
-        def _pct(s, p): 
-            s = pd.to_numeric(s, errors="coerce").dropna()
-            return float(s.quantile(p)) if len(s) else np.nan
+        clipped_dur = int((~m_dur).sum())
+        clipped_dst = int((~m_dst).sum())
+        clipped_spd = int((~m_spd).sum())
 
-        dur_ok = sub.loc[m_dur, "duration_min"]
-        dst_ok = sub.loc[m_dst, "distance_km"]
-        spd_ok = sub.loc[m_spd, "speed_kmh"]
-
-        # Shares for planning guardrails
-        short_share = 100.0 * (dur_ok.lt(5).mean()) if len(dur_ok) else np.nan
-        long_share  = 100.0 * (dur_ok.gt(45).mean()) if len(dur_ok) else np.nan
-
-        k1,k2,k3,k4,k5 = st.columns(5)
-        with k1:
-            st.metric("Median duration", f"{_pct(dur_ok, 0.5):.1f} min")
-        with k2:
-            st.metric("P90 duration", f"{_pct(dur_ok, 0.90):.1f} min")
-        with k3:
-            st.metric("Median distance", f"{_pct(dst_ok, 0.5):.2f} km")
-        with k4:
-            st.metric("Median speed", f"{_pct(spd_ok, 0.5):.1f} km/h")
-        with k5:
-            subtxt = f"<5 min: {short_share:.0f}% · >45 min: {long_share:.0f}%"
-            st.metric("Trip mix (duration)", "—", subtxt)
-
-        st.caption("KPIs computed on robust inliers only; toggle clipping to audit sensitivity.")
-
-        # ===== Histograms (side-by-side, robust) =====
+        # ───────────────────────── Histograms (robust & safe) ─────────────────────────
         cA, cB, cC = st.columns(3)
 
+        def _safe_hist(series, xlab, log_x=False):
+            s = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+            if s.empty:
+                return None
+            q = s.quantile([0.01, 0.995]).tolist()
+            rng = q if (robust and not log_x) else None
+            fig = px.histogram(s, x=s.name, nbins=60, labels={s.name: xlab}, log_x=log_x, range_x=rng)
+            fig.update_layout(height=420, margin=dict(l=10, r=10, t=40, b=10))
+            return fig
+
         with cA:
-            d = dur_ok
-            if len(d):
-                ql, qh = d.quantile([0.01, 0.995]).tolist() if robust else (d.min(), d.max())
-                fig = px.histogram(
-                    d, x="duration_min", nbins=60,
-                    labels={"duration_min":"Duration (min)"},
-                    log_x=log_duration,
-                    range_x=[ql, qh] if robust and not log_duration else None
-                )
-                fig.add_vline(x=_pct(d, 0.5), line_dash="dot", annotation_text="Med")
-                fig.add_vline(x=_pct(d, 0.90), line_dash="dot", annotation_text="P90")
-                fig.update_layout(height=380, title="Duration distribution")
+            fig = _safe_hist(df_f.loc[m_dur, "duration_min"], "Duration (min)", log_duration)
+            if fig is not None:
                 st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("No valid rows for duration.")
+            st.caption(f"Clipped rows (duration): {clipped_dur:,}")
 
         with cB:
-            d = dst_ok
-            if len(d):
-                ql, qh = d.quantile([0.01, 0.995]).tolist() if robust else (d.min(), d.max())
-                fig = px.histogram(
-                    d, x="distance_km", nbins=60,
-                    labels={"distance_km":"Distance (km)"},
-                    log_x=log_distance,
-                    range_x=[ql, qh] if robust and not log_distance else None
-                )
-                fig.add_vline(x=_pct(d, 0.5), line_dash="dot", annotation_text="Med")
-                fig.add_vline(x=_pct(d, 0.90), line_dash="dot", annotation_text="P90")
-                fig.update_layout(height=380, title="Distance distribution")
+            fig = _safe_hist(df_f.loc[m_dst, "distance_km"], "Distance (km)", log_distance)
+            if fig is not None:
                 st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("No valid rows for distance.")
+            st.caption(f"Clipped rows (distance): {clipped_dst:,}")
 
         with cC:
-            d = spd_ok
-            if len(d):
-                ql, qh = d.quantile([0.01, 0.995]).tolist() if robust else (d.min(), d.max())
-                fig = px.histogram(
-                    d, x="speed_kmh", nbins=60,
-                    labels={"speed_kmh":"Speed (km/h)"},
-                    log_x=log_speed,
-                    range_x=[ql, qh] if robust and not log_speed else None
-                )
-                fig.add_vline(x=_pct(d, 0.5), line_dash="dot", annotation_text="Med")
-                fig.add_vline(x=_pct(d, 0.90), line_dash="dot", annotation_text="P90")
-                fig.update_layout(height=380, title="Speed distribution")
+            fig = _safe_hist(df_f.loc[m_spd, "speed_kmh"], "Speed (km/h)", log_speed)
+            if fig is not None:
                 st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("No valid rows for speed.")
+            st.caption(f"Clipped rows (speed): {clipped_spd:,}")
 
-        # ===== ECDFs (read medians & tail risk instantly) =====
-        st.subheader("Cumulative distributions (ECDF)")
-        def _ecdf(s: pd.Series):
-            s = pd.to_numeric(s, errors="coerce").dropna().sort_values()
-            if not len(s): 
-                return pd.Series(dtype=float), pd.Series(dtype=float)
-            y = np.linspace(0, 100, len(s))
-            return s.reset_index(drop=True), pd.Series(y)
-
-        ec1, ec2, ec3 = st.columns(3)
-        with ec1:
-            x,y = _ecdf(dur_ok)
-            if len(x):
-                fig = px.line(x=x, y=y, labels={"x":"Duration (min)","y":"Cum. % of trips"})
-                fig.update_layout(height=260, title="Duration ECDF")
-                st.plotly_chart(fig, use_container_width=True)
-        with ec2:
-            x,y = _ecdf(dst_ok)
-            if len(x):
-                fig = px.line(x=x, y=y, labels={"x":"Distance (km)","y":"Cum. % of trips"})
-                fig.update_layout(height=260, title="Distance ECDF")
-                st.plotly_chart(fig, use_container_width=True)
-        with ec3:
-            x,y = _ecdf(spd_ok)
-            if len(x):
-                fig = px.line(x=x, y=y, labels={"x":"Speed (km/h)","y":"Cum. % of trips"})
-                fig.update_layout(height=260, title="Speed ECDF")
-                st.plotly_chart(fig, use_container_width=True)
-
-        # ===== Scatter: distance vs duration (colored by speed) with feasibility guides =====
+        # ───────────────── Distance vs duration — operating envelope ─────────────────
         st.subheader("Distance vs duration — feasibility & operating envelope")
-        color_col = "member_type_display" if "member_type_display" in sub.columns else None
-        inliers = sub[m_dst & m_dur & m_spd].copy()
-        outliers = sub[~(m_dst & m_dur & m_spd)].copy()
 
+        color_col = "member_type_display" if "member_type_display" in df_f.columns else None
+
+        # Strict inliers & finite-only for plotting
+        inliers_mask_all = m_dst & m_dur & m_spd
+        cols_needed = ["distance_km", "duration_min", "speed_kmh"] + ([color_col] if color_col else [])
+        inliers = df_f.loc[inliers_mask_all, cols_needed].copy()
+
+        # Sanitize & dtype
+        for cnum in ["distance_km", "duration_min", "speed_kmh"]:
+            if cnum in inliers.columns:
+                inliers[cnum] = pd.to_numeric(inliers[cnum], errors="coerce")
+        inliers.replace([np.inf, -np.inf], np.nan, inplace=True)
+        inliers.dropna(subset=["distance_km", "duration_min", "speed_kmh"], inplace=True)
+        if color_col:
+            inliers[color_col] = inliers[color_col].astype(str)
+
+        # Optional sample for performance
         nmax = 35000
         if len(inliers) > nmax:
             inliers = inliers.sample(n=nmax, random_state=13)
 
-        # Color by speed for intuitive reading (member type stays available as hover)
-        fig2 = px.scatter(
-            inliers, x="distance_km", y="duration_min",
+        # Build scatter colored by speed (continuous)
+        scatter_kwargs = dict(
+            data_frame=inliers,
+            x="distance_km",
+            y="duration_min",
             color="speed_kmh",
-            labels={"distance_km":"Distance (km)", "duration_min":"Duration (min)", "speed_kmh":"Speed (km/h)"},
-            opacity=0.85, hover_data=[color_col] if color_col else None
+            labels={
+                "distance_km": "Distance (km)",
+                "duration_min": "Duration (min)",
+                "speed_kmh": "Speed (km/h)",
+            },
+            opacity=0.85,
         )
-        # Overlay (optional) outliers faintly
+        if color_col:
+            scatter_kwargs["hover_data"] = [color_col]
+
+        fig2 = px.scatter(**scatter_kwargs)
+
+        # Faint outliers layer (safe lists to avoid JSON hiccups)
+        outliers = df_f.loc[~inliers_mask_all, ["distance_km", "duration_min"]].copy()
+        for cnum in ["distance_km", "duration_min"]:
+            outliers[cnum] = pd.to_numeric(outliers[cnum], errors="coerce")
+        outliers.replace([np.inf, -np.inf], np.nan, inplace=True)
+        outliers.dropna(subset=["distance_km", "duration_min"], inplace=True)
+
         if len(outliers):
-            fig2.add_trace(go.Scatter(
-                x=outliers["distance_km"], y=outliers["duration_min"],
-                mode="markers", name="Outliers", opacity=0.15, marker=dict(size=6)
-            ))
+            fig2.add_trace(
+                go.Scatter(
+                    x=outliers["distance_km"].astype(float).tolist(),
+                    y=outliers["duration_min"].astype(float).tolist(),
+                    mode="markers",
+                    name="Outliers",
+                    opacity=0.12,
+                    marker=dict(size=6),
+                )
+            )
 
-        # Feasibility guides: lines of constant speed (10, 20, 30 km/h)
-        xs = np.linspace(max(0.01, inliers["distance_km"].min()), max(1.0, inliers["distance_km"].max()), 200)
-        for v in [10, 20, 30]:
-            # duration (min) = distance(km) / v(km/h) * 60
-            ys = xs / v * 60.0
-            fig2.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name=f"{v} km/h guide", line=dict(dash="dot", width=1)))
+        # Feasibility guides: constant speeds (duration = km / (km/h) * 60)
+        if len(inliers):
+            x_min = max(0.01, float(inliers["distance_km"].min()))
+            x_max = max(x_min + 0.5, float(inliers["distance_km"].max()))
+            xs = np.linspace(x_min, x_max, 200).astype(float).tolist()
+            for v in [10.0, 20.0, 30.0]:
+                ys = [(x / v) * 60.0 for x in xs]
+                fig2.add_trace(
+                    go.Scatter(
+                        x=xs,
+                        y=ys,
+                        mode="lines",
+                        name=f"{int(v)} km/h guide",
+                        line=dict(dash="dot", width=1),
+                    )
+                )
 
-        xql, xqh = inliers["distance_km"].quantile([0.01, 0.995]).tolist()
-        yql, yqh = inliers["duration_min"].quantile([0.01, 0.995]).tolist()
-        fig2.update_xaxes(range=[xql, xqh])
-        fig2.update_yaxes(range=[yql, yqh])
-        fig2.update_layout(height=540)
+            # Tight, finite axis ranges from inliers
+            xql, xqh = inliers["distance_km"].quantile([0.01, 0.995]).tolist()
+            yql, yqh = inliers["duration_min"].quantile([0.01, 0.995]).tolist()
+            if np.isfinite(xql) and np.isfinite(xqh) and xql < xqh:
+                fig2.update_xaxes(range=[float(xql), float(xqh)])
+            if np.isfinite(yql) and np.isfinite(yqh) and yql < yqh:
+                fig2.update_yaxes(range=[float(yql), float(yqh)])
+
+        fig2.update_layout(height=560, title="Trip operating envelope")
         st.plotly_chart(fig2, use_container_width=True)
 
-        # ===== Member comparison (small multiples) =====
-        st.subheader("Member vs Casual — compact comparison")
-        if "member_type_display" in sub.columns:
-            col1, col2 = st.columns(2)
-            # Speed
-            with col1:
-                g = inliers.groupby("member_type_display")["speed_kmh"].median().reset_index()
-                figM1 = px.bar(g, x="member_type_display", y="speed_kmh",
-                               labels={"member_type_display": MEMBER_LEGEND_TITLE, "speed_kmh":"Median speed (km/h)"})
-                figM1.update_layout(height=320, title="Median speed by user type")
-                st.plotly_chart(figM1, use_container_width=True)
-            # Duration
-            with col2:
-                g = inliers.groupby("member_type_display")["duration_min"].median().reset_index()
-                figM2 = px.bar(g, x="member_type_display", y="duration_min",
-                               labels={"member_type_display": MEMBER_LEGEND_TITLE, "duration_min":"Median duration (min)"})
-                figM2.update_layout(height=320, title="Median duration by user type")
-                st.plotly_chart(figM2, use_container_width=True)
+        # ───────────────────────── Weather relationships ─────────────────────────
+        def _add_fit_line(fig_, xvals, yvals, name):
+            x = pd.to_numeric(xvals, errors="coerce")
+            y = pd.to_numeric(yvals, errors="coerce")
+            ok = x.notna() & y.notna()
+            if ok.sum() >= 3 and x[ok].nunique() >= 2:
+                a, b = np.polyfit(x[ok], y[ok], 1)
+                xs = np.linspace(x[ok].min(), x[ok].max(), 120)
+                ys = a * xs + b
+                fig_.add_trace(
+                    go.Scatter(x=xs.tolist(), y=ys.tolist(), mode="lines", name=name, line=dict(dash="dash"))
+                )
+            return fig_
 
-        # ===== 2D density: distance vs duration (kept, but sharpened titles) =====
+        st.subheader("Weather relationships")
+        c1, c2 = st.columns(2)
+
+        temp_ok = "avg_temp_c" in df_f.columns and df_f["avg_temp_c"].notna().any()
+        wind_ok = "wind_kph" in df_f.columns and df_f["wind_kph"].notna().any()
+
+        # Speed vs temperature
+        with c1:
+            if temp_ok:
+                dat = df_f[m_spd & df_f["avg_temp_c"].notna()][
+                    ["avg_temp_c", "speed_kmh", color_col] if color_col else ["avg_temp_c", "speed_kmh"]
+                ].copy()
+                for cnum in ["avg_temp_c", "speed_kmh"]:
+                    dat[cnum] = pd.to_numeric(dat[cnum], errors="coerce")
+                dat.replace([np.inf, -np.inf], np.nan, inplace=True)
+                dat.dropna(subset=["avg_temp_c", "speed_kmh"], inplace=True)
+                if len(dat) > 30000:
+                    dat = dat.sample(n=30000, random_state=4)
+                figt = px.scatter(
+                    dat,
+                    x="avg_temp_c",
+                    y="speed_kmh",
+                    color=color_col if color_col else None,
+                    opacity=0.75,
+                    labels={
+                        "avg_temp_c": "Avg temperature (°C)",
+                        "speed_kmh": "Speed (km/h)",
+                        "member_type_display": MEMBER_LEGEND_TITLE,
+                    },
+                )
+                figt = _add_fit_line(figt, dat["avg_temp_c"], dat["speed_kmh"], "Linear fit")
+                figt.update_layout(height=480, title="Speed vs Temperature")
+                st.plotly_chart(figt, use_container_width=True)
+            else:
+                st.info("No temperature column available for this view.")
+
+        # Speed vs wind
+        with c2:
+            if wind_ok:
+                dat = df_f[m_spd & df_f["wind_kph"].notna()][
+                    ["wind_kph", "speed_kmh", color_col] if color_col else ["wind_kph", "speed_kmh"]
+                ].copy()
+                for cnum in ["wind_kph", "speed_kmh"]:
+                    dat[cnum] = pd.to_numeric(dat[cnum], errors="coerce")
+                dat.replace([np.inf, -np.inf], np.nan, inplace=True)
+                dat.dropna(subset=["wind_kph", "speed_kmh"], inplace=True)
+                if len(dat) > 30000:
+                    dat = dat.sample(n=30000, random_state=5)
+                figw = px.scatter(
+                    dat,
+                    x="wind_kph",
+                    y="speed_kmh",
+                    color=color_col if color_col else None,
+                    opacity=0.75,
+                    labels={
+                        "wind_kph": "Wind (kph)",
+                        "speed_kmh": "Speed (km/h)",
+                        "member_type_display": MEMBER_LEGEND_TITLE,
+                    },
+                )
+                figw = _add_fit_line(figw, dat["wind_kph"], dat["speed_kmh"], "Linear fit")
+                figw.update_layout(height=480, title="Speed vs Wind")
+                st.plotly_chart(figw, use_container_width=True)
+            else:
+                st.info("No wind column available for this view.")
+
+        # Duration & Distance vs Temperature
+        c3, c4 = st.columns(2)
+        with c3:
+            if temp_ok:
+                dat = df_f[m_dur & df_f["avg_temp_c"].notna()][
+                    ["avg_temp_c", "duration_min", color_col] if color_col else ["avg_temp_c", "duration_min"]
+                ].copy()
+                for cnum in ["avg_temp_c", "duration_min"]:
+                    dat[cnum] = pd.to_numeric(dat[cnum], errors="coerce")
+                dat.replace([np.inf, -np.inf], np.nan, inplace=True)
+                dat.dropna(subset=["avg_temp_c", "duration_min"], inplace=True)
+                if len(dat) > 30000:
+                    dat = dat.sample(n=30000, random_state=6)
+                figdt = px.scatter(
+                    dat,
+                    x="avg_temp_c",
+                    y="duration_min",
+                    color=color_col if color_col else None,
+                    opacity=0.7,
+                    labels={
+                        "avg_temp_c": "Avg temperature (°C)",
+                        "duration_min": "Duration (min)",
+                        "member_type_display": MEMBER_LEGEND_TITLE,
+                    },
+                )
+                figdt = _add_fit_line(figdt, dat["avg_temp_c"], dat["duration_min"], "Linear fit")
+                figdt.update_layout(height=420, title="Duration vs Temperature")
+                st.plotly_chart(figdt, use_container_width=True)
+
+        with c4:
+            if temp_ok:
+                dat = df_f[m_dst & df_f["avg_temp_c"].notna()][
+                    ["avg_temp_c", "distance_km", color_col] if color_col else ["avg_temp_c", "distance_km"]
+                ].copy()
+                for cnum in ["avg_temp_c", "distance_km"]:
+                    dat[cnum] = pd.to_numeric(dat[cnum], errors="coerce")
+                dat.replace([np.inf, -np.inf], np.nan, inplace=True)
+                dat.dropna(subset=["avg_temp_c", "distance_km"], inplace=True)
+                if len(dat) > 30000:
+                    dat = dat.sample(n=30000, random_state=7)
+                figDxT = px.scatter(
+                    dat,
+                    x="avg_temp_c",
+                    y="distance_km",
+                    color=color_col if color_col else None,
+                    opacity=0.7,
+                    labels={
+                        "avg_temp_c": "Avg temperature (°C)",
+                        "distance_km": "Distance (km)",
+                        "member_type_display": MEMBER_LEGEND_TITLE,
+                    },
+                )
+                figDxT = _add_fit_line(figDxT, dat["avg_temp_c"], dat["distance_km"], "Linear fit")
+                figDxT.update_layout(height=420, title="Distance vs Temperature")
+                st.plotly_chart(figDxT, use_container_width=True)
+
+        # ───────────────────────── 2D density: distance vs duration ─────────────────────────
         st.markdown("### 🔳 2D density: distance vs duration")
         try:
-            inliers_sample = inliers.sample(n=min(len(inliers), 60000), random_state=11) if len(inliers) > 60000 else inliers
-            fig_hex = px.density_heatmap(
-                inliers_sample, x="distance_km", y="duration_min",
-                nbinsx=60, nbinsy=60, histfunc="count",
-                labels={"distance_km":"Distance (km)", "duration_min":"Duration (min)"},
-                color_continuous_scale="Viridis"
-            )
-            fig_hex.update_layout(height=520, title="Trip density (distance × duration)")
-            st.plotly_chart(fig_hex, use_container_width=True)
+            inliers_all = df_f[m_dst & m_dur][["distance_km", "duration_min"]].copy()
+            for cnum in ["distance_km", "duration_min"]:
+                inliers_all[cnum] = pd.to_numeric(inliers_all[cnum], errors="coerce")
+            inliers_all.replace([np.inf, -np.inf], np.nan, inplace=True)
+            inliers_all.dropna(subset=["distance_km", "duration_min"], inplace=True)
+            if len(inliers_all) > 60000:
+                inliers_all = inliers_all.sample(n=60000, random_state=11)
+            if not inliers_all.empty:
+                fig_hex = px.density_heatmap(
+                    inliers_all,
+                    x="distance_km",
+                    y="duration_min",
+                    nbinsx=60,
+                    nbinsy=60,
+                    histfunc="count",
+                    labels={"distance_km": "Distance (km)", "duration_min": "Duration (min)"},
+                    color_continuous_scale="Viridis",
+                )
+                fig_hex.update_layout(height=520, margin=dict(l=10, r=10, t=40, b=10))
+                st.plotly_chart(fig_hex, use_container_width=True)
+            else:
+                st.caption("No inlier points to render.")
         except Exception as e:
             st.caption(f"Density heatmap unavailable: {e}")
 
-        # ===== Operating summary table (bin-by-bin) =====
-        st.subheader("Operating summary — duration bands")
-        if len(inliers):
-            bins = [0,5,10,15,20,30,45,60,120,240]
-            labels = ["<5","5–10","10–15","15–20","20–30","30–45","45–60","60–120","120–240"]
-            t = inliers.copy()
-            t["dur_band"] = pd.cut(t["duration_min"], bins=bins, labels=labels, include_lowest=True, right=True)
-            summary = (t.groupby("dur_band")
-                        .agg(trips=("duration_min","size"),
-                             pct=("duration_min", lambda s: 100*len(s)/len(t)),
-                             med_dist=("distance_km","median"),
-                             med_spd=("speed_kmh","median"))
-                        .reset_index())
-            summary["pct"] = summary["pct"].round(1)
-            summary["med_dist"] = summary["med_dist"].round(2)
-            summary["med_spd"] = summary["med_spd"].round(1)
-            st.dataframe(summary, use_container_width=True)
-            st.download_button(
-                "Download duration-band summary (CSV)",
-                summary.to_csv(index=False).encode("utf-8"),
-                "trip_metrics_duration_band_summary.csv", "text/csv"
-            )
-
-        # ===== Correlations (quick view) — kept =====
+        # ───────────────────────── Correlations (quick view) ─────────────────────────
         st.markdown("### 🔗 Correlations (quick view)")
-        corr_cols = [c for c in ["duration_min","distance_km","speed_kmh","avg_temp_c","wind_kph"] if c in sub.columns]
+        corr_cols = [c for c in ["duration_min", "distance_km", "speed_kmh", "avg_temp_c", "wind_kph"] if c in df_f.columns]
         if len(corr_cols) >= 2:
-            corr_mat = sub[corr_cols].corr(numeric_only=True)
+            corr_mat = df_f[corr_cols].apply(pd.to_numeric, errors="coerce").corr(numeric_only=True)
             fig_corr = px.imshow(corr_mat, text_auto=True, aspect="auto", labels=dict(color="r"))
-            fig_corr.update_layout(height=420)
+            fig_corr.update_layout(height=420, margin=dict(l=10, r=10, t=40, b=10))
             st.plotly_chart(fig_corr, use_container_width=True)
         else:
             st.caption("Not enough numeric columns to compute a correlation matrix.")
 
-        # ===== Rain/Wet impact on duration & speed (kept) =====
+        # ───────────────────────── Rain/Wet impact ─────────────────────────
         st.subheader("Rain impact on trip characteristics")
-        has_precip_bin = ("precip_bin" in sub.columns) and sub["precip_bin"].notna().any()
-        has_wet_flag = ("wet_day" in sub.columns)
+        has_precip_bin = ("precip_bin" in df_f.columns) and df_f["precip_bin"].notna().any()
+        has_wet_flag = ("wet_day" in df_f.columns)
 
         cc1, cc2 = st.columns(2)
+
+        # Duration
         with cc1:
             if has_precip_bin:
                 figpb = px.box(
-                    sub[m_dur], x="precip_bin", y="duration_min",
-                    category_orders={"precip_bin":["Low","Medium","High"]},
-                    labels={"precip_bin":"Precipitation", "duration_min":"Duration (min)"}
+                    df_f[m_dur],
+                    x="precip_bin",
+                    y="duration_min",
+                    category_orders={"precip_bin": ["Low", "Medium", "High"]},
+                    labels={"precip_bin": "Precipitation", "duration_min": "Duration (min)"},
                 )
                 figpb.update_layout(height=420, title="Duration by Precipitation")
                 st.plotly_chart(figpb, use_container_width=True)
             elif has_wet_flag:
-                figwd = px.box(
-                    sub[m_dur].assign(day_type=lambda x: x["wet_day"].map({0:"Dry",1:"Wet"})),
-                    x="day_type", y="duration_min",
-                    labels={"day_type":"Day type", "duration_min":"Duration (min)"}
-                )
+                dfx = df_f[m_dur].copy()
+                dfx["day_type"] = dfx["wet_day"].map({0: "Dry", 1: "Wet"})
+                figwd = px.box(dfx, x="day_type", y="duration_min", labels={"day_type": "Day type", "duration_min": "Duration (min)"})
                 figwd.update_layout(height=420, title="Duration: Wet vs Dry")
                 st.plotly_chart(figwd, use_container_width=True)
 
+        # Speed
         with cc2:
             if has_precip_bin:
                 figpbs = px.box(
-                    sub[m_spd], x="precip_bin", y="speed_kmh",
-                    category_orders={"precip_bin":["Low","Medium","High"]},
-                    labels={"precip_bin":"Precipitation", "speed_kmh":"Speed (km/h)"}
+                    df_f[m_spd],
+                    x="precip_bin",
+                    y="speed_kmh",
+                    category_orders={"precip_bin": ["Low", "Medium", "High"]},
+                    labels={"precip_bin": "Precipitation", "speed_kmh": "Speed (km/h)"},
                 )
                 figpbs.update_layout(height=420, title="Speed by Precipitation")
                 st.plotly_chart(figpbs, use_container_width=True)
             elif has_wet_flag:
-                figwds = px.box(
-                    sub[m_spd].assign(day_type=lambda x: x["wet_day"].map({0:"Dry",1:"Wet"})),
-                    x="day_type", y="speed_kmh",
-                    labels={"day_type":"Day type", "speed_kmh":"Speed (km/h)"}
-                )
+                dfx = df_f[m_spd].copy()
+                dfx["day_type"] = dfx["wet_day"].map({0: "Dry", 1: "Wet"})
+                figwds = px.box(dfx, x="day_type", y="speed_kmh", labels={"day_type": "Day type", "speed_kmh": "Speed (km/h)"})
                 figwds.update_layout(height=420, title="Speed: Wet vs Dry")
                 st.plotly_chart(figwds, use_container_width=True)
 
-        # ===== Quick weather deltas (KPIs) — kept and slightly clarified =====
+        # ───────────────────────── Quick weather deltas (KPIs) ─────────────────────────
         k1, k2, k3, k4 = st.columns(4)
-        temp_ok = "avg_temp_c" in sub.columns and sub["avg_temp_c"].notna().any()
-        wind_ok = "wind_kph" in sub.columns and sub["wind_kph"].notna().any()
         with k1:
-            if has_wet_flag and sub["wet_day"].notna().any():
-                dry_spd = sub.loc[m_spd & (sub["wet_day"]==0), "speed_kmh"].mean()
-                wet_spd = sub.loc[m_spd & (sub["wet_day"]==1), "speed_kmh"].mean()
-                if pd.notnull(dry_spd) and pd.notnull(wet_spd) and dry_spd>0:
-                    st.metric("Speed: Wet vs Dry", f"{(wet_spd-dry_spd)/dry_spd*100:+.1f}%")
+            if has_wet_flag and df_f["wet_day"].notna().any():
+                dry_spd = pd.to_numeric(df_f.loc[m_spd & (df_f["wet_day"] == 0), "speed_kmh"], errors="coerce").mean()
+                wet_spd = pd.to_numeric(df_f.loc[m_spd & (df_f["wet_day"] == 1), "speed_kmh"], errors="coerce").mean()
+                if pd.notnull(dry_spd) and pd.notnull(wet_spd) and dry_spd > 0:
+                    st.metric("Speed: Wet vs Dry", f"{(wet_spd - dry_spd) / dry_spd * 100:+.1f}%")
+
         with k2:
             if wind_ok:
-                calm_spd = sub.loc[m_spd & (sub["wind_kph"]<10), "speed_kmh"].mean()
-                windy_spd = sub.loc[m_spd & (sub["wind_kph"]>=20), "speed_kmh"].mean()
-                if pd.notnull(calm_spd) and pd.notnull(windy_spd) and calm_spd>0:
-                    st.metric("Speed: Windy (≥20) vs Calm (<10)", f"{(windy_spd-calm_spd)/calm_spd*100:+.1f}%")
+                calm_spd = pd.to_numeric(df_f.loc[m_spd & (df_f["wind_kph"] < 10), "speed_kmh"], errors="coerce").mean()
+                windy_spd = pd.to_numeric(df_f.loc[m_spd & (df_f["wind_kph"] >= 20), "speed_kmh"], errors="coerce").mean()
+                if pd.notnull(calm_spd) and pd.notnull(windy_spd) and calm_spd > 0:
+                    st.metric("Speed: Windy (≥20) vs Calm (<10)", f"{(windy_spd - calm_spd) / calm_spd * 100:+.1f}%")
+
         with k3:
             if temp_ok:
-                comfy = sub.loc[m_spd & sub["avg_temp_c"].between(15,25), "speed_kmh"].mean()
-                extreme = sub.loc[m_spd & (~sub["avg_temp_c"].between(5,30)), "speed_kmh"].mean()
-                if pd.notnull(comfy) and pd.notnull(extreme):
-                    st.metric("Speed: Comfy (15–25°C) vs Extreme", f"{(comfy-extreme)/comfy*100:+.1f}%")
+                comfy = pd.to_numeric(df_f.loc[m_spd & df_f["avg_temp_c"].between(15, 25, inclusive="both"), "speed_kmh"], errors="coerce").mean()
+                extreme = pd.to_numeric(df_f.loc[m_spd & (~df_f["avg_temp_c"].between(5, 30, inclusive="both")), "speed_kmh"], errors="coerce").mean()
+                if pd.notnull(comfy) and pd.notnull(extreme) and comfy != 0:
+                    st.metric("Speed: Comfy (15–25°C) vs Extreme", f"{(comfy - extreme) / comfy * 100:+.1f}%")
+
         with k4:
             if has_precip_bin:
-                low_dur = sub.loc[m_dur & (sub["precip_bin"]=="Low"), "duration_min"].mean()
-                high_dur = sub.loc[m_dur & (sub["precip_bin"]=="High"), "duration_min"].mean()
-                if pd.notnull(low_dur) and pd.notnull(high_dur) and low_dur>0:
-                    st.metric("Duration: High rain vs Low", f"{(high_dur-low_dur)/low_dur*100:+.1f}%")
+                low_dur = pd.to_numeric(df_f.loc[m_dur & (df_f["precip_bin"] == "Low"), "duration_min"], errors="coerce").mean()
+                high_dur = pd.to_numeric(df_f.loc[m_dur & (df_f["precip_bin"] == "High"), "duration_min"], errors="coerce").mean()
+                if pd.notnull(low_dur) and pd.notnull(high_dur) and low_dur > 0:
+                    st.metric("Duration: High rain vs Low", f"{(high_dur - low_dur) / low_dur * 100:+.1f}%")
 
-        st.caption("Robust view clips only for plotting and KPIs; raw rows remain available for other pages/exports.")
+        st.caption("Robust clipping affects plotting only. All rows remain available to other pages/exports.")
 
 elif page == "Member vs Casual Profiles":
     st.header("👥 Member vs Casual riding patterns")
