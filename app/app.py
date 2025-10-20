@@ -748,101 +748,111 @@ elif page == "Trip Flows Map":
         except Exception as e:
             st.error(f"Failed to load map HTML: {e}")
 
-    # ---- 3) What to look for (context text) ----
-    bullets = {
-        "AM commute (Weekdays 07–10) • fair weather":
-            "- **Inbound flows** to CBD/transit hubs\n- **Source→Sink pairs** for AM rebalancing\n- Stage trucks on corridors",
-        "PM commute (Weekdays 16–19) • fair weather":
-            "- **Outbound flows** to residential clusters\n- Evening sinks that fill up\n- Compare vs AM for asymmetry",
-        "Weekend leisure (Sat–Sun 10–18) • warm & dry":
-            "- **Scenic corridors** (waterfront/parks)\n- Longer casual trips\n- Event adjacency effects",
-        "Rainy & cold days (all hours)":
-            "- **Demand drop** vs resilient OD pairs\n- Scale staffing down; watch hotspots",
-        "No extra preset (use sidebar filters only)":
-            "- Use sidebar filters to define a scenario; OD & imbalance update live"
-    }
+        # ---- 3) Context: What to look for ----
     st.markdown("### 🎯 What to look for")
     st.markdown(bullets.get(preset, ""))
+    st.markdown("---")
 
-    # ---- 4) OD Top Flows (Sankey) + CSV ----
-    if {"start_station_name", "end_station_name"}.issubset(dflow.columns):
+    # ---- 4) OD Flows + Imbalance (only once) ----
+    if not {"start_station_name", "end_station_name"}.issubset(dflow.columns):
+        st.info("Need `start_station_name` and `end_station_name` columns to build OD flows and compute imbalance.")
+    else:
+        # --- Top OD Pairs ---
         st.subheader("Top origin → destination flows (Sankey)")
         topN = st.slider("Show top N OD pairs", 10, 50, 20, 5, key="od_topN")
-        flows = (dflow.groupby(["start_station_name", "end_station_name"])
-                       .size().reset_index(name="count")
-                       .sort_values("count", ascending=False).head(topN))
-        if flows.empty:
-            st.info("No trips after filters/preset.")
-        else:
-            labels = pd.Index(pd.concat([flows["start_station_name"], flows["end_station_name"]]).unique())
-            lab2id = {v: i for i, v in enumerate(labels)}
-            src = flows["start_station_name"].map(lab2id)
-            tgt = flows["end_station_name"].map(lab2id)
-            fig = go.Figure(data=[go.Sankey(
-                node=dict(label=[shorten_name(x, 26) for x in labels], pad=18, thickness=14),
-                link=dict(source=src, target=tgt, value=flows["count"])
-            )])
-            fig.update_layout(height=520, title=f"Top {len(flows)} OD pairs — {preset}")
-            st.plotly_chart(fig, use_container_width=True)
+        flows = (
+            dflow.groupby(["start_station_name", "end_station_name"])
+            .size()
+            .reset_index(name="count")
+            .sort_values("count", ascending=False)
+            .head(topN)
+        )
 
-            st.download_button(
-                "Download OD pairs (CSV)",
-                flows.rename(columns={"start_station_name":"origin","end_station_name":"destination","count":"rides"})
-                     .to_csv(index=False).encode("utf-8"),
-                "top_od_pairs.csv", "text/csv"
+        labels = pd.Index(pd.concat([flows["start_station_name"], flows["end_station_name"]]).unique())
+        lab2id = {v: i for i, v in enumerate(labels)}
+        src = flows["start_station_name"].map(lab2id)
+        tgt = flows["end_station_name"].map(lab2id)
+        fig = go.Figure(
+            data=[
+                go.Sankey(
+                    node=dict(label=[shorten_name(x, 26) for x in labels], pad=18, thickness=14),
+                    link=dict(source=src, target=tgt, value=flows["count"]),
+                )
+            ]
+        )
+        fig.update_layout(height=520, title=f"Top {len(flows)} OD pairs — {preset}")
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.download_button(
+            "⬇️ Download OD pairs (CSV)",
+            flows.rename(
+                columns={"start_station_name": "origin", "end_station_name": "destination", "count": "rides"}
             )
-    else:
-        st.info("Need `start_station_name` and `end_station_name` to build OD flows.")
+            .to_csv(index=False)
+            .encode("utf-8"),
+            "top_od_pairs.csv",
+            "text/csv",
+        )
 
-    # ---- 5) Station Supply/Demand Imbalance ----
-    st.subheader("Station imbalance — sources vs sinks")
-    if {"start_station_name", "end_station_name"}.issubset(dflow.columns):
+        # --- Station Imbalance ---
+        st.markdown("### ⚖️ Station imbalance — sources vs sinks")
         start_counts = dflow.groupby("start_station_name").size().rename("departures")
-        end_counts   = dflow.groupby("end_station_name").size().rename("arrivals")
+        end_counts = dflow.groupby("end_station_name").size().rename("arrivals")
         bal = pd.concat([start_counts, end_counts], axis=1).fillna(0)
-        bal["net"] = bal["arrivals"] - bal["departures"]   # +ve = sink, -ve = source
+        bal["net"] = bal["arrivals"] - bal["departures"]
         bal = bal.sort_values("net", ascending=False)
 
         k = st.slider("Top K sinks/sources", 5, 20, 10, key="imb_k")
-        sinks  = bal.head(k).reset_index().rename(columns={"index":"station"})
-        sources = bal.tail(k).reset_index().rename(columns={"index":"station"})
+        sinks = bal.head(k).reset_index().rename(columns={"index": "station"})
+        sources = bal.tail(k).reset_index().rename(columns={"index": "station"})
 
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**Top sinks (more arrivals than departures)**")
-            fig_sink = go.Figure(go.Bar(
-                x=[shorten_name(s, 28) for s in sinks["station"]],
-                y=sinks["net"], text=sinks["net"].astype(int), textposition="outside",
-                hovertemplate="<b>%{x}</b><br>Net inflow: %{y:,}<extra></extra>"
-            ))
+            fig_sink = go.Figure(
+                go.Bar(
+                    x=[shorten_name(s, 28) for s in sinks["station"]],
+                    y=sinks["net"],
+                    text=sinks["net"].astype(int),
+                    textposition="outside",
+                )
+            )
             friendly_axis(fig_sink, x="Station", y="Net inflow (arrivals − departures)")
-            fig_sink.update_layout(height=420, margin=dict(l=20,r=20,t=40,b=80))
+            fig_sink.update_layout(height=420, margin=dict(l=20, r=20, t=40, b=80))
             fig_sink.update_xaxes(tickangle=45, tickfont=dict(size=10))
             st.plotly_chart(fig_sink, use_container_width=True)
 
         with c2:
             st.markdown("**Top sources (more departures than arrivals)**")
             srcs = sources.copy()
-            srcs["neg"] = -srcs["net"]  # positive height for plotting
-            fig_src = go.Figure(go.Bar(
-                x=[shorten_name(s, 28) for s in srcs["station"]],
-                y=srcs["neg"], text=(-srcs["net"]).astype(int), textposition="outside",
-                hovertemplate="<b>%{x}</b><br>Net outflow: %{text:,}<extra></extra>"
-            ))
+            srcs["pos"] = -srcs["net"]
+            fig_src = go.Figure(
+                go.Bar(
+                    x=[shorten_name(s, 28) for s in srcs["station"]],
+                    y=srcs["pos"],
+                    text=(-srcs["net"]).astype(int),
+                    textposition="outside",
+                )
+            )
             friendly_axis(fig_src, x="Station", y="Net outflow (departures − arrivals)")
-            fig_src.update_layout(height=420, margin=dict(l=20,r=20,t=40,b=80))
+            fig_src.update_layout(height=420, margin=dict(l=20, r=20, t=40, b=80))
             fig_src.update_xaxes(tickangle=45, tickfont=dict(size=10))
             st.plotly_chart(fig_src, use_container_width=True)
 
         st.download_button(
-            "Download station imbalance (CSV)",
-            bal.reset_index().rename(columns={"index":"station"}).to_csv(index=False).encode("utf-8"),
-            "station_imbalance.csv", "text/csv"
+            "⬇️ Download station imbalance (CSV)",
+            bal.reset_index()
+            .rename(columns={"index": "station"})
+            .to_csv(index=False)
+            .encode("utf-8"),
+            "station_imbalance.csv",
+            "text/csv",
         )
-    else:
-        st.info("Need `start_station_name` and `end_station_name` to compute station imbalance.")
 
-    st.caption("Tip: Presets adjust OD/imbalance analysis. The Kepler map is a static export; rebuild it to reflect a scenario.")
+        st.caption(
+            f"ℹ️ Preset “{preset}” shapes both OD and imbalance widgets. "
+            f"Kepler map is static — rebuild or use pydeck for dynamic filtering."
+        )
 
 
     st.markdown("### 🎯 What to look for")
