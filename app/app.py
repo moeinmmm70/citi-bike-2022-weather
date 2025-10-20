@@ -668,14 +668,37 @@ elif page == "What-if: Temp → Rides":
         st.caption("Lightweight linear fit for planning; enrich later with rain, wind, weekday effects.")
 
 elif page == "Recommendations":
-    st.header("🚀 Recommendations (ops-ready)")
-    st.markdown(
-        "- **Staff for heat:** lift afternoon staging on warm days; pre-position near waterfront leisure loops.\n"
-        "- **Target the head:** top stations (Pareto head) deserve higher baseline inventory and faster swap cycles.\n"
-        "- **Commute windows:** weekday 7–9 and 17–19 spikes — schedule rebalancing trucks just before peaks.\n"
-        "- **Corridors:** align truck loops with persistent OD corridors; stage at endpoints to reduce empty miles.\n"
-        "- **Monitor anomalies:** calendar-level outliers (events/weather alerts) should trigger temporary boosts."
-    )
+    st.header("🚀 Conclusion & Recommendations")
+    st.markdown("### ")
+    st.markdown("""
+### Recommendations (4–8 weeks)
+
+1) **Scale hotspot capacity**  
+   - 🧱 Portable/temporary docks where feasible.  
+   - 🎯 Target **≥85% fill at open (AM)** and **≥70% before PM peak** at top-20 stations.
+
+2) **Predictive stocking: weather + weekday**  
+   - 📈 Simple regression/rules for **next-day dock targets** by station.  
+   - 🌡️ Escalate stocking when **forecast highs ≥ 22 °C**.
+
+3) **Corridor-aligned rebalancing**  
+   - 🚚 Stage trucks at **repeated high-flow endpoints**; run **loop routes**.
+
+4) **Rider incentives**  
+   - 🎟️ Credits for returns to **under-stocked docks** during commute windows.
+
+**KPIs**  
+- ⛔ **Dock-out rate** < 5% at top-20 stations during peaks  
+- 📉 **Empty/Full dock complaints** ↓ 30% MoM  
+- 🛣️ **Truck miles per rebalanced bike** ↓ 15%  
+- ⏱️ **On-time dock readiness** ≥ 90% (before AM peak)
+""")
+    st.markdown("> **Next** — 🧪 Pilot at the top 10 stations for 2 weeks; compare KPIs before/after.")
+    st.caption("🧱 Limitations: sample reduced for deployment; no per-dock inventory; events/holidays not modeled.")
+
+    st.markdown("### ")
+    st.markdown("### ")
+    st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
 
 # ────────────────────────────── Footer ─────────────────────────────────────
 st.markdown("---")
