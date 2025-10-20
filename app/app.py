@@ -1251,7 +1251,7 @@ elif page == "OD Flows — Sankey + Map":
 
     c5, c6, c7 = st.columns(3)
     with c5:
-        min_rides = st.number_input("Min rides per edge", 1, 1000, 10, 1)  # stricter default
+        min_rides = st.number_input("Min rides per edge", min_value=1, max_value=1000, value=2, step=1)
     with c6:
         drop_loops = st.checkbox("Exclude self-loops", value=True)
     with c7:
@@ -1265,8 +1265,25 @@ elif page == "OD Flows — Sankey + Map":
         edges = pd.DataFrame(columns=["start_station_name","end_station_name","rides"])
 
     if edges.empty:
-        st.info("No OD edges for current filters.")
-        st.stop()
+    # compute counts without thresholds to suggest a value
+    gb_cols = ["start_station_name","end_station_name"]
+    if member_split and "member_type_display" in sub.columns:
+        gb_cols.append("member_type_display")
+    counts = sub.groupby(gb_cols).size()
+    total_pairs = int(counts.shape[0])
+    if total_pairs == 0:
+        st.info("No OD pairs in the current data slice (check date/hour/weekday filters).")
+    else:
+        # threshold so that at least ~topk edges remain
+        sorted_counts = np.sort(counts.values)[::-1]
+        idx = min(topk-1, len(sorted_counts)-1)
+        suggested = int(max(1, sorted_counts[idx]))
+        st.info(
+            f"No OD edges for current filters. Try **Min rides per edge = {suggested}** "
+            f"(there are {total_pairs:,} unique OD pairs; the {topk}-th heaviest has {suggested} rides)."
+        )
+    st.stop()
+
 
     # --- guard: don't render until user opts in (prevents instant heavy draw)
     if not render_now:
@@ -1395,8 +1412,24 @@ elif page == "OD Matrix — Top Origins × Destinations":
         edges = pd.DataFrame(columns=["start_station_name","end_station_name","rides"])
 
     if edges.empty:
-        st.info("No OD edges for current filters.")
-        st.stop()
+    # compute counts without thresholds to suggest a value
+    gb_cols = ["start_station_name","end_station_name"]
+    if member_split and "member_type_display" in sub.columns:
+        gb_cols.append("member_type_display")
+    counts = sub.groupby(gb_cols).size()
+    total_pairs = int(counts.shape[0])
+    if total_pairs == 0:
+        st.info("No OD pairs in the current data slice (check date/hour/weekday filters).")
+    else:
+        # threshold so that at least ~topk edges remain
+        sorted_counts = np.sort(counts.values)[::-1]
+        idx = min(topk-1, len(sorted_counts)-1)
+        suggested = int(max(1, sorted_counts[idx]))
+        st.info(
+            f"No OD edges for current filters. Try **Min rides per edge = {suggested}** "
+            f"(there are {total_pairs:,} unique OD pairs; the {topk}-th heaviest has {suggested} rides)."
+        )
+    st.stop()
 
     # keep top rows/cols by marginal weight to bound size
     MAX_SIDE = 35
