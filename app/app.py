@@ -240,16 +240,32 @@ def apply_filters(df: pd.DataFrame,
                   daterange: tuple[pd.Timestamp, pd.Timestamp] | None,
                   seasons: list[str] | None,
                   usertype: str | None,
-                  temp_range: tuple[float, float] | None) -> pd.DataFrame:
+                  temp_range: tuple[float, float] | None,
+                  hour_range: tuple[int, int] | None = None,
+                  weekdays: list[str] | None = None) -> pd.DataFrame:
     out = df.copy()
+
     if daterange and "date" in out.columns:
         out = out[(out["date"] >= pd.to_datetime(daterange[0])) & (out["date"] <= pd.to_datetime(daterange[1]))]
+
     if seasons and "season" in out.columns:
         out = out[out["season"].isin(seasons)]
+
     if usertype and usertype != "All" and "member_type" in out.columns:
         out = out[out["member_type"].astype(str) == usertype]
+
     if temp_range and "avg_temp_c" in out.columns:
         out = out[(out["avg_temp_c"] >= temp_range[0]) & (out["avg_temp_c"] <= temp_range[1])]
+
+    if hour_range and "hour" in out.columns:
+        lo, hi = hour_range
+        out = out[(out["hour"] >= lo) & (out["hour"] <= hi)]
+
+    if weekdays and "weekday" in out.columns:
+        name_to_idx = {"Mon":0,"Tue":1,"Wed":2,"Thu":3,"Fri":4,"Sat":5,"Sun":6}
+        idxs = [name_to_idx[w] for w in weekdays if w in name_to_idx]
+        out = out[out["weekday"].isin(idxs)]
+
     return out
 
 def compute_core_kpis(df_f: pd.DataFrame, daily_f: pd.DataFrame | None):
@@ -307,6 +323,16 @@ if "avg_temp_c" in df.columns:
     tmin, tmax = float(np.nanmin(df["avg_temp_c"])), float(np.nanmax(df["avg_temp_c"]))
     temp_range = st.sidebar.slider("Temperature filter (°C)", tmin, tmax, (tmin, tmax))
 
+# --- Time filters ---
+hour_range = None
+if "hour" in df.columns:
+    hour_range = st.sidebar.slider("Hour of day", 0, 23, (6, 22))
+
+weekday_names = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
+weekdays = None
+if "weekday" in df.columns:
+    weekdays = st.sidebar.multiselect("Weekday(s)", weekday_names, default=weekday_names)
+
 st.sidebar.markdown("---")
 page = st.sidebar.selectbox(
     "📑 Analysis page",
@@ -331,6 +357,8 @@ df_f = apply_filters(
     seasons,
     usertype,
     temp_range,
+    hour_range=hour_range,
+    weekdays=weekdays,
 )
 
 daily_all = ensure_daily(df)
@@ -668,12 +696,55 @@ elif page == "Station Imbalance (In vs Out)":
         st.plotly_chart(fig, use_container_width=True)
 
         if {"start_lat","start_lng"}.issubset(df_f.columns):
+            import pydeck as pdk
+
             st.subheader("Map — stations sized by net IN/OUT")
+
+            # approximate station coords from start coords (median per station)
             coords = (df_f.groupby("start_station_name")[["start_lat","start_lng"]]
                           .median().rename(columns={"start_lat":"lat","start_lng":"lon"}))
-            m = biggest.join(coords, on="station", how="left")
-            st.map(m.dropna(subset=["lat","lon"])[["lat","lon"]])
-            st.caption("Tip: Use this with time filters to see AM vs PM redistribution needs.")
+
+            m = biggest.join(coords, on="station", how="left").dropna(subset=["lat","lon"]).copy()
+
+            # color: green (IN) / red (OUT)
+            m["color"] = np.where(m["imbalance"] >= 0,
+                                   [34, 197, 94, 200],   # green-ish RGBA
+                                   [220, 38, 38, 200])   # red-ish RGBA
+
+            # radius scale: keep readable across datasets
+            # use a gentle scaling: base 60 m + 35 * sqrt(|Δ|)
+            m["radius"] = 60 + 35 * np.sqrt(np.abs(m["imbalance"]).clip(lower=1))
+
+            tooltip = {
+                "html": "<b>{station}</b><br>IN: {in}<br>OUT: {out}<br>&Delta;: {imbalance}",
+                "style": {"backgroundColor": "rgba(17,17,17,0.85)", "color": "white"}
+            }
+
+            # center on data (fallback to Manhattan)
+            if len(m):
+                center_lat, center_lon = float(m["lat"].median()), float(m["lon"].median())
+            else:
+                center_lat, center_lon = 40.73, -73.98
+
+            view_state = pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=11, pitch=0, bearing=0)
+
+            layer = pdk.Layer(
+                "ScatterplotLayer",
+                data=m,
+                get_position="[lon, lat]",
+                get_radius="radius",
+                get_fill_color="color",
+                pickable=True,
+                auto_highlight=True
+            )
+
+            deck = pdk.Deck(layers=[layer],
+                            initial_view_state=view_state,
+                            map_style="mapbox://styles/mapbox/dark-v11",
+                            tooltip=tooltip)
+
+            st.pydeck_chart(deck)
+            st.caption("Tip: combine with the **Hour of day** and **Weekday(s)** filters in the sidebar to compare AM vs PM redistribution.")
 
 elif page == "Pareto: Share of Rides":
     st.header("📈 Pareto curve — demand concentration")
