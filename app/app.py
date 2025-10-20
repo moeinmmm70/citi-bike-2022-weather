@@ -7,6 +7,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.io as pio
+from keplergl import KeplerGl
+from streamlit_keplergl import keplergl_static
 
 # ────────────────────────────── Page/Theming ──────────────────────────────
 st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", page_icon="🚲", layout="wide")
@@ -586,15 +588,6 @@ elif page == "Pareto: Share of Rides":
         st.markdown("**Action:** prioritize inventory and maintenance on the head of the curve; treat the tail as on-demand.")
 
 elif page == "Trip Flows Map":
-    # --- deps for this page ---
-    from pathlib import Path
-    import json, copy
-    import pandas as pd
-    import numpy as np
-    import plotly.graph_objects as go
-    from keplergl import KeplerGl
-    from streamlit_keplergl import keplergl_static
-
     st.header("🗺️ Trip flows (Kepler.gl)")
     st.caption(
         "Now using live Kepler rendering. Choose a **Map preset** (JSON) to switch layers/filters/camera. "
@@ -604,8 +597,8 @@ elif page == "Trip Flows Map":
     # ---------- Where to look for presets ----------
     ROOT = Path(repo_root) if "repo_root" in globals() else Path.cwd()
     preset_dirs = [
-        ROOT / "map",                              # your repo folder (as you uploaded)
-        ROOT / "data" / "reports" / "map",        # older path you used
+        ROOT / "map",                              
+        ROOT / "data" / "reports" / "map",        
         ROOT / "data" / "reports" / "map" / "presets",
     ]
     preset_files = []
@@ -750,11 +743,37 @@ elif page == "Trip Flows Map":
         st.info("Preset notes:\n- " + "\n- ".join(preset_notes))
 
     # ---------- Render Kepler with the selected map preset ----------
-    # IMPORTANT: KeplerGl expects a dict of dataframes keyed by the dataset id used in the config.
-    # We normalized config to expect "trips".
-    data_dict = {"trips": df_f}  # pass full df_f; filtering is handled by the Kepler config itself
+    if _KEPLER_OK:
+    data_dict = {"trips": df_f}  # must match the dataId normalized in the config
     m = KeplerGl(height=900, data=data_dict, config=cfg)
     keplergl_static(m)
+else:
+    st.warning(
+        "Kepler live rendering is unavailable because the Kepler packages aren’t installed.\n\n"
+        f"Import error: `{_KEPLER_ERR}`\n\n"
+        "▶ Add to your `app/requirements.txt`:\n"
+        "    keplergl==0.3.2\n"
+        "    streamlit-keplergl==0.3.1\n\n"
+        "Falling back to the static HTML export below."
+    )
+    # Fallback: show your previously exported HTML map
+    path_to_html = None
+    for p in MAP_HTMLS:
+        if p.exists():
+            path_to_html = p
+            break
+    if path_to_html:
+        try:
+            html_data = Path(path_to_html).read_text(encoding="utf-8")
+            st.components.v1.html(html_data, height=900, scrolling=True)
+        except Exception as e:
+            st.error(f"Failed to load map HTML: {e}")
+    else:
+        st.info(
+            "Kepler.gl HTML not found.\n\nPlace one of:\n"
+            "- `reports/map/citibike_trip_flows_2022.html`\n"
+            "- `reports/map/NYC_Bike_Trips_Aggregated.html`"
+        )
 
     # ---------- Context ----------
     st.markdown("### 🎯 What to look for")
