@@ -187,15 +187,36 @@ def _build_od_edges(df: pd.DataFrame,
         gb_cols.append("member_type_display")
 
 @st.cache_data(show_spinner=False)
-def _cached_edges(df, per_origin: bool, topk: int, min_rides: int, drop_loops: bool, member_split: bool):
-    return _build_od_edges(
-        df=df,
-        per_origin=per_origin,
-        topk=topk,
-        min_rides=min_rides,
-        drop_self_loops=drop_loops,
-        member_split=member_split,
-    )
+def _cached_edges(df,
+                  per_origin: bool,
+                  topk: int,
+                  min_rides: int,
+                  drop_loops: bool,
+                  member_split: bool) -> pd.DataFrame:
+    """Cached safe wrapper that ALWAYS returns a DataFrame."""
+    try:
+        g = _build_od_edges(
+            df=df,
+            per_origin=per_origin,
+            topk=int(topk),
+            min_rides=int(min_rides),
+            drop_self_loops=bool(drop_loops),
+            member_split=bool(member_split),
+        )
+    except Exception as e:
+        # Surface the failure but don't break the UI
+        st.warning(f"Edge build failed: {e}")
+        g = None
+    # Coerce to DataFrame no matter what
+    if g is None:
+        return pd.DataFrame(columns=["start_station_name","end_station_name","rides"])
+    if not isinstance(g, pd.DataFrame):
+        return pd.DataFrame(g)
+    # Ensure expected columns exist (avoids downstream attribute errors)
+    for c in ["start_station_name","end_station_name","rides"]:
+        if c not in g.columns:
+            g[c] = pd.Series(dtype="object" if c.endswith("_name") else "float")
+    return g
 
     # Count rides robustly (works even if ride_id missing)
     g = df.groupby(gb_cols).size().rename("rides").reset_index()
@@ -1239,6 +1260,10 @@ elif page == "OD Flows — Sankey + Map":
     sub = _time_slice(df_f, mode)
     edges = _cached_edges(sub, per_origin, topk, min_rides, drop_loops, member_split)
 
+    # Make absolutely sure we have a DataFrame
+    if edges is None or not isinstance(edges, pd.DataFrame):
+        edges = pd.DataFrame(columns=["start_station_name","end_station_name","rides"])
+
     if edges.empty:
         st.info("No OD edges for current filters.")
         st.stop()
@@ -1364,6 +1389,10 @@ elif page == "OD Matrix — Top Origins × Destinations":
 
     sub = _time_slice(df_f, mode)
     edges = _cached_edges(sub, per_origin, topk, min_rides, True, member_split)
+
+    # Make absolutely sure we have a DataFrame
+    if edges is None or not isinstance(edges, pd.DataFrame):
+        edges = pd.DataFrame(columns=["start_station_name","end_station_name","rides"])
 
     if edges.empty:
         st.info("No OD edges for current filters.")
