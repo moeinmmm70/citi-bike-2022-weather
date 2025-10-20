@@ -2503,9 +2503,9 @@ elif (
 
         if len(geo):
             scale = st.slider("Bubble scale", 1, 12, 5)
-            # radius: 60m base + sqrt(rides) scaling (safe for zeros)
+            # radius: 20m base + sqrt(rides) scaling (safe for zeros)
             vmax = float(geo["rides"].max())
-            geo["radius"] = (60 + scale * (np.sqrt(geo["rides"]) / np.sqrt(vmax if vmax > 0 else 1)) * 100).astype(float)
+            geo["radius"] = (20 + scale * (np.sqrt(geo["rides"]) / np.sqrt(vmax if vmax > 0 else 1)) * 100).astype(float)
 
             # color as list-of-lists (categorical-safe)
             geo["color"] = [[37, 99, 235, 200]] * len(geo)
