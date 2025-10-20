@@ -596,19 +596,48 @@ def _qp_set(**kv):
     except Exception:
         pass
 
-# On first load, seed from query params
+PAGES = [
+    "Intro",
+    "Weather vs Bike Usage",
+    "Trip Metrics (Duration • Distance • Speed)",
+    "Member vs Casual Profiles",
+    "OD Flows — Sankey + Map",
+    "OD Matrix — Top Origins × Dest",
+    "Station Popularity",
+    "Station Imbalance (In vs Out)",
+    "Pareto: Share of Rides",
+    "Weekday × Hour Heatmap",
+    "Recommendations",
+]
+
+# Seed default page from URL (if present), otherwise first page
 _qp = _qp_get()
-if _qp:
-    # Page
-    if "page" in _qp:
-        try:
-            wanted = _qp["page"][0] if isinstance(_qp["page"], list) else _qp["page"]
-            if wanted in ["Intro","Weather vs Bike Usage","Trip Metrics (Duration • Distance • Speed)","Member vs Casual Profiles",
-                          "OD Flows — Sankey + Map","OD Matrix — Top Origins × Dest","Station Popularity","Station Imbalance (In vs Out)",
-                          "Pareto: Share of Rides","Weekday × Hour Heatmap","Recommendations"]:
-                page = wanted
-        except Exception:
-            pass
+_qp_page = None
+if "page" in _qp:
+    _qp_page = _qp["page"][0] if isinstance(_qp["page"], list) else _qp["page"]
+if _qp_page not in PAGES:
+    _qp_page = PAGES[0]
+
+# The widget value drives the app; we do NOT override it afterwards
+page = st.sidebar.selectbox(
+    "📑 Analysis page",
+    PAGES,
+    index=PAGES.index(_qp_page),
+    key="page_select",
+)
+
+# After all filters are read, mirror state back to the URL (no overriding)
+try:
+    _qp_set(
+        page=page,
+        date0=str(date_range[0]) if date_range else None,
+        date1=str(date_range[1]) if date_range else None,
+        usertype=usertype or "All",
+        hour0=hour_range[0] if hour_range else None,
+        hour1=hour_range[1] if hour_range else None,
+    )
+except Exception:
+    pass
 
 # After filters chosen → write them to URL (safe)
 try:
