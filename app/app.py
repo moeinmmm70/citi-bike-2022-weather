@@ -587,11 +587,12 @@ elif page == "Pareto: Share of Rides":
 
 elif page == "Trip Flows Map":
     st.header("🗺️ Trip flows (Kepler.gl)")
+    st.caption("Note: The embedded Kepler.gl map is a static HTML export. The **presets and filters below** drive the "
+               "OD Sankey and Station Imbalance widgets, not the map iframe itself.")
 
     # ---- 0) Presets (default = AM commute, fair weather) ----
-    st.caption("Preset focuses the OD analysis and imbalance KPIs below (your global sidebar filters still apply).")
     preset = st.selectbox(
-        "Analysis preset",
+        "Analysis preset (applies to the widgets below)",
         [
             "AM commute (Weekdays 07–10) • fair weather",
             "PM commute (Weekdays 16–19) • fair weather",
@@ -600,62 +601,135 @@ elif page == "Trip Flows Map":
             "No extra preset (use sidebar filters only)",
         ],
         index=0,
-        help="These presets apply additional filters only to the analysis widgets on this page."
     )
 
-    def apply_preset_local(dfin: pd.DataFrame) -> pd.DataFrame:
+    # ---- detect available columns once ----
+    has_started_at = "started_at" in df_f.columns
+    has_date = "date" in df_f.columns
+    tempcol = next((c for c in ["avg_temp_c","avgTemp","avg_temp","temperature_c"] if c in df_f.columns), None)
+    precip_bin_col = "precip_bin" if "precip_bin" in df_f.columns else None
+    precip_raw = next((c for c in ["precip_mm","precipitation_mm","precip_mm_day","precipitation"] if c in df_f.columns), None)
+
+    # ---- helper: build weather mask with graceful fallbacks ----
+    def fair_weather_mask(df):
+        m = pd.Series(True, index=df.index)
+        if tempcol is not None:
+            m &= df[tempcol].between(12, 26)
+        # Prefer pre-binned precipitation if available
+        if precip_bin_col is not None:
+            m &= df[precip_bin_col].astype(str) != "High"
+        elif precip_raw is not None:
+            # If raw precip exists, treat top tercile as "High"
+            q = df[precip_raw].quantile([0.66]) if df[precip_raw].notna().sum() > 10 else pd.Series({0.66: 2.0})
+            m &= (df[precip_raw] <= float(q.iloc[0]))
+        return m
+
+    # ---- 1) Apply preset to a local copy (hour filters skipped if no hour info) ----
+    def apply_preset_local(dfin: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+        info = []
+        if dfin.empty:
+            return dfin, ["No data after global (sidebar) filters."]
+
         dfx = dfin.copy()
-        # Ensure timestamps exist if we want hours/weekday
-        dt = None
-        if "started_at" in dfx.columns:
+
+        # Time columns
+        if has_started_at:
             dt = pd.to_datetime(dfx["started_at"], errors="coerce")
-        elif "date" in dfx.columns:
-            # fallback: use midnight timestamps (loses hour resolution)
+            dfx["_weekday"] = dt.dt.weekday
+            dfx["_hour"] = dt.dt.hour
+        elif has_date:
+            # Only weekday is reliable; no hour resolution
             dt = pd.to_datetime(dfx["date"], errors="coerce")
+            dfx["_weekday"] = dt.dt.weekday
+            dfx["_hour"] = np.nan  # sentinel for "no hour"
+            info.append("No hour-level timestamps found — hour-based filters are skipped.")
         else:
-            return dfx  # nothing we can do
+            info.append("No date/timestamp available — presets fall back to weather only.")
+            dfx["_weekday"] = np.nan
+            dfx["_hour"] = np.nan
 
-        dfx["_weekday"] = dt.dt.weekday           # Mon=0 … Sun=6
-        dfx["_hour"] = dt.dt.hour.fillna(0).astype(int)
-
-        # unify weather cols
-        tempcol = next((c for c in ["avg_temp_c","avgTemp","avg_temp","temperature_c"] if c in dfx.columns), None)
-        precip_bin = "precip_bin" if "precip_bin" in dfx.columns else None
-
-        def fair_weather_mask(df):
-            m1 = pd.Series(True, index=df.index)
-            if tempcol is not None:
-                m1 &= (df[tempcol] >= 12) & (df[tempcol] <= 26)
-            if precip_bin is not None:
-                m1 &= (df[precip_bin].astype(str) != "High")
-            return m1
+        m = pd.Series(True, index=dfx.index)
 
         if preset.startswith("AM commute"):
-            m = (dfx["_weekday"] <= 4) & (dfx["_hour"].between(7, 10, inclusive="left")) & fair_weather_mask(dfx)
-            return dfx[m]
+            # Weekdays
+            if dfx["_weekday"].notna().any():
+                m &= dfx["_weekday"] <= 4
+            else:
+                info.append("Weekday filter skipped (no weekday).")
+            # Hours
+            if has_started_at:
+                m &= dfx["_hour"].between(7, 10, inclusive="left")
+            else:
+                info.append("Hour window (07–10) skipped.")
+            # Weather
+            fm = fair_weather_mask(dfx)
+            m &= fm
+            if fm.sum() == 0:
+                info.append("Fair-weather mask removed all rows; weather filter relaxed.")
+                m = m | True  # effectively keep current m unchanged
+
         elif preset.startswith("PM commute"):
-            m = (dfx["_weekday"] <= 4) & (dfx["_hour"].between(16, 19, inclusive="left")) & fair_weather_mask(dfx)
-            return dfx[m]
+            if dfx["_weekday"].notna().any():
+                m &= dfx["_weekday"] <= 4
+            else:
+                info.append("Weekday filter skipped (no weekday).")
+            if has_started_at:
+                m &= dfx["_hour"].between(16, 19, inclusive="left")
+            else:
+                info.append("Hour window (16–19) skipped.")
+            fm = fair_weather_mask(dfx)
+            if fm.sum() > 0:
+                m &= fm
+            else:
+                info.append("Fair-weather mask removed all rows; weather filter relaxed.")
+
         elif preset.startswith("Weekend leisure"):
-            m = (dfx["_weekday"] >= 5) & (dfx["_hour"].between(10, 18, inclusive="both"))
+            if dfx["_weekday"].notna().any():
+                m &= dfx["_weekday"] >= 5
+            else:
+                info.append("Weekend filter skipped (no weekday).")
+            if has_started_at:
+                m &= dfx["_hour"].between(10, 18, inclusive="both")
+            else:
+                info.append("Hour window (10–18) skipped.")
+            # Warm & dry
             if tempcol is not None:
                 m &= dfx[tempcol].between(18, 28)
-            if precip_bin is not None:
-                m &= (dfx[precip_bin].astype(str) == "Low")
-            return dfx[m]
+            else:
+                info.append("Temperature filter skipped (no temperature).")
+            if precip_bin_col is not None:
+                m &= dfx[precip_bin_col].astype(str) == "Low"
+            elif precip_raw is not None:
+                q33 = dfx[precip_raw].quantile(0.33) if dfx[precip_raw].notna().sum() > 10 else 0.2
+                m &= dfx[precip_raw] <= q33
+            else:
+                info.append("Precipitation filter skipped (no precipitation).")
+
         elif preset.startswith("Rainy & cold"):
-            m = pd.Series(True, index=dfx.index)
             if tempcol is not None:
-                m &= (dfx[tempcol] < 8)
-            if precip_bin is not None:
-                m &= (dfx[precip_bin].astype(str) == "High")
-            return dfx[m]
-        else:
-            return dfx
+                m &= dfx[tempcol] < 8
+            else:
+                info.append("Cold filter skipped (no temperature).")
+            if precip_bin_col is not None:
+                m &= dfx[precip_bin_col].astype(str) == "High"
+            elif precip_raw is not None:
+                q66 = dfx[precip_raw].quantile(0.66) if dfx[precip_raw].notna().sum() > 10 else 2.0
+                m &= dfx[precip_raw] >= q66
+            else:
+                info.append("Rainy filter skipped (no precipitation).")
 
-    dflow = apply_preset_local(df_f)
+        # else: No extra preset
 
-    # ---- 1) Kepler.gl HTML (unchanged) ----
+        out = dfx[m] if m.any() else dfx.iloc[0:0].copy()
+        if out.empty:
+            info.append("Preset filters produced 0 rows. Try another preset or relax global filters.")
+        return out, info
+
+    dflow, preset_notes = apply_preset_local(df_f)
+    if preset_notes:
+        st.info("Preset notes:\n- " + "\n- ".join(preset_notes))
+
+    # ---- 2) Kepler.gl HTML (static export) ----
     path_to_html = None
     for p in MAP_HTMLS:
         if p.exists():
@@ -673,6 +747,103 @@ elif page == "Trip Flows Map":
             st.components.v1.html(html_data, height=900, scrolling=True)
         except Exception as e:
             st.error(f"Failed to load map HTML: {e}")
+
+    # ---- 3) What to look for (context text) ----
+    bullets = {
+        "AM commute (Weekdays 07–10) • fair weather":
+            "- **Inbound flows** to CBD/transit hubs\n- **Source→Sink pairs** for AM rebalancing\n- Stage trucks on corridors",
+        "PM commute (Weekdays 16–19) • fair weather":
+            "- **Outbound flows** to residential clusters\n- Evening sinks that fill up\n- Compare vs AM for asymmetry",
+        "Weekend leisure (Sat–Sun 10–18) • warm & dry":
+            "- **Scenic corridors** (waterfront/parks)\n- Longer casual trips\n- Event adjacency effects",
+        "Rainy & cold days (all hours)":
+            "- **Demand drop** vs resilient OD pairs\n- Scale staffing down; watch hotspots",
+        "No extra preset (use sidebar filters only)":
+            "- Use sidebar filters to define a scenario; OD & imbalance update live"
+    }
+    st.markdown("### 🎯 What to look for")
+    st.markdown(bullets.get(preset, ""))
+
+    # ---- 4) OD Top Flows (Sankey) + CSV ----
+    if {"start_station_name", "end_station_name"}.issubset(dflow.columns):
+        st.subheader("Top origin → destination flows (Sankey)")
+        topN = st.slider("Show top N OD pairs", 10, 50, 20, 5, key="od_topN")
+        flows = (dflow.groupby(["start_station_name", "end_station_name"])
+                       .size().reset_index(name="count")
+                       .sort_values("count", ascending=False).head(topN))
+        if flows.empty:
+            st.info("No trips after filters/preset.")
+        else:
+            labels = pd.Index(pd.concat([flows["start_station_name"], flows["end_station_name"]]).unique())
+            lab2id = {v: i for i, v in enumerate(labels)}
+            src = flows["start_station_name"].map(lab2id)
+            tgt = flows["end_station_name"].map(lab2id)
+            fig = go.Figure(data=[go.Sankey(
+                node=dict(label=[shorten_name(x, 26) for x in labels], pad=18, thickness=14),
+                link=dict(source=src, target=tgt, value=flows["count"])
+            )])
+            fig.update_layout(height=520, title=f"Top {len(flows)} OD pairs — {preset}")
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.download_button(
+                "Download OD pairs (CSV)",
+                flows.rename(columns={"start_station_name":"origin","end_station_name":"destination","count":"rides"})
+                     .to_csv(index=False).encode("utf-8"),
+                "top_od_pairs.csv", "text/csv"
+            )
+    else:
+        st.info("Need `start_station_name` and `end_station_name` to build OD flows.")
+
+    # ---- 5) Station Supply/Demand Imbalance ----
+    st.subheader("Station imbalance — sources vs sinks")
+    if {"start_station_name", "end_station_name"}.issubset(dflow.columns):
+        start_counts = dflow.groupby("start_station_name").size().rename("departures")
+        end_counts   = dflow.groupby("end_station_name").size().rename("arrivals")
+        bal = pd.concat([start_counts, end_counts], axis=1).fillna(0)
+        bal["net"] = bal["arrivals"] - bal["departures"]   # +ve = sink, -ve = source
+        bal = bal.sort_values("net", ascending=False)
+
+        k = st.slider("Top K sinks/sources", 5, 20, 10, key="imb_k")
+        sinks  = bal.head(k).reset_index().rename(columns={"index":"station"})
+        sources = bal.tail(k).reset_index().rename(columns={"index":"station"})
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Top sinks (more arrivals than departures)**")
+            fig_sink = go.Figure(go.Bar(
+                x=[shorten_name(s, 28) for s in sinks["station"]],
+                y=sinks["net"], text=sinks["net"].astype(int), textposition="outside",
+                hovertemplate="<b>%{x}</b><br>Net inflow: %{y:,}<extra></extra>"
+            ))
+            friendly_axis(fig_sink, x="Station", y="Net inflow (arrivals − departures)")
+            fig_sink.update_layout(height=420, margin=dict(l=20,r=20,t=40,b=80))
+            fig_sink.update_xaxes(tickangle=45, tickfont=dict(size=10))
+            st.plotly_chart(fig_sink, use_container_width=True)
+
+        with c2:
+            st.markdown("**Top sources (more departures than arrivals)**")
+            srcs = sources.copy()
+            srcs["neg"] = -srcs["net"]  # positive height for plotting
+            fig_src = go.Figure(go.Bar(
+                x=[shorten_name(s, 28) for s in srcs["station"]],
+                y=srcs["neg"], text=(-srcs["net"]).astype(int), textposition="outside",
+                hovertemplate="<b>%{x}</b><br>Net outflow: %{text:,}<extra></extra>"
+            ))
+            friendly_axis(fig_src, x="Station", y="Net outflow (departures − arrivals)")
+            fig_src.update_layout(height=420, margin=dict(l=20,r=20,t=40,b=80))
+            fig_src.update_xaxes(tickangle=45, tickfont=dict(size=10))
+            st.plotly_chart(fig_src, use_container_width=True)
+
+        st.download_button(
+            "Download station imbalance (CSV)",
+            bal.reset_index().rename(columns={"index":"station"}).to_csv(index=False).encode("utf-8"),
+            "station_imbalance.csv", "text/csv"
+        )
+    else:
+        st.info("Need `start_station_name` and `end_station_name` to compute station imbalance.")
+
+    st.caption("Tip: Presets adjust OD/imbalance analysis. The Kepler map is a static export; rebuild it to reflect a scenario.")
+
 
     st.markdown("### 🎯 What to look for")
     bullets = {
