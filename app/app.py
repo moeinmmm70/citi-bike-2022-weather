@@ -705,7 +705,7 @@ df_f = _backfill_trip_weather(df_f, daily_all)
 if page == "Intro":
     render_hero_panel()
 
-    # Active selection summary (shows what the KPIs reflect)
+    # Selection summary (everything below reflects this slice)
     st.caption(
         f"**Selection:** {date_range[0]} → {date_range[1]} · "
         f"{'All seasons' if seasons is None or set(seasons)==set(['Winter','Spring','Summer','Autumn']) else ', '.join(seasons)} · "
@@ -716,10 +716,10 @@ if page == "Intro":
     show_cover(cover_path)
     st.caption("⚙️ Powered by NYC Citi Bike data • 365 days • Interactive visuals")
 
-    # --- Core KPIs (robust to missing cols) ---
-    KPIs = compute_core_kpis(df_f, daily_f)  # returns total_rides, avg_day, corr_tr
+    # --- Core KPIs (robust/defensible) ---
+    KPIs = compute_core_kpis(df_f, daily_f)  # total_rides, avg_day, corr_tr
 
-    # Weather uplift: comfy vs extreme bands (defensive)
+    # Weather uplift: comfy (15–25°C) vs extreme (<5 or >30°C)
     weather_uplift_pct = None
     if daily_f is not None and not daily_f.empty and "avg_temp_c" in daily_f.columns:
         d_nonnull = daily_f.dropna(subset=["avg_temp_c", "bike_rides_daily"]).copy()
@@ -730,7 +730,7 @@ if page == "Intro":
                 weather_uplift_pct = (comfy - extreme) / extreme * 100.0
     weather_str = f"{weather_uplift_pct:+.0f}%" if weather_uplift_pct is not None else "—"
 
-    # Coverage: % of selected days with usable weather (so weather KPIs are defensible)
+    # Coverage: % of selected days with usable weather (defensibility for weather KPIs)
     coverage = "—"
     if daily_f is not None and not daily_f.empty:
         if "avg_temp_c" in daily_f.columns:
@@ -739,7 +739,7 @@ if page == "Intro":
         else:
             coverage = "0%"
 
-    # Peak Season (only if season exists and we can compute a sensible average)
+    # Peak Season (optional text if you want to keep it handy)
     peak_value, peak_sub = "—", ""
     if "season" in df_f.columns and daily_f is not None and not daily_f.empty:
         tmp = daily_f.copy()
@@ -756,49 +756,71 @@ if page == "Intro":
                 peak_value = f"{m.index[0]}"
                 peak_sub   = f"{kfmt(m.iloc[0])} avg trips"
 
-    # --- KPI cards (clean, defensible set) ---
+    # --- KPI cards ---
     cA, cB, cC, cD, cE = st.columns(5)
     with cA:
-        kpi_card(
-            "Total Trips",
-            kfmt(KPIs.get("total_rides", 0)),
-            "Across all stations",
-            "🧮"
-        )
+        kpi_card("Total Trips", kfmt(KPIs.get("total_rides", 0)), "Across all stations", "🧮")
     with cB:
-        kpi_card(
-            "Daily Average",
-            kfmt(KPIs["avg_day"]) if KPIs.get("avg_day") is not None else "—",
-            "Trips per day (selection)",
-            "📅"
-        )
+        kpi_card("Daily Average", kfmt(KPIs["avg_day"]) if KPIs.get("avg_day") is not None else "—",
+                 "Trips per day (selection)", "📅")
     with cC:
-        kpi_card(
-            "Temp ↔ Rides (r)",
-            f"{KPIs['corr_tr']:+.3f}" if KPIs.get("corr_tr") is not None else "—",
-            "Pearson on daily agg",
-            "🌡️"
-        )
+        kpi_card("Temp ↔ Rides (r)",
+                 f"{KPIs['corr_tr']:+.3f}" if KPIs.get("corr_tr") is not None else "—",
+                 "Pearson on daily agg", "🌡️")
     with cD:
-        kpi_card(
-            "Weather Uplift",
-            weather_str,
-            "15–25°C vs extreme (<5 or >30°C)",
-            "🌦️"
-        )
+        kpi_card("Weather Uplift", weather_str, "15–25°C vs extreme", "🌦️")
     with cE:
-        # If you prefer “Coverage” instead of “Peak Season”, swap the two lines below
+        # Prefer Coverage for credibility; swap to Peak Season if you want
         kpi_card("Coverage", coverage, "Weather data availability", "🧩")
-        # Or show Peak Season (comment the line above and uncomment below):
-        # kpi_card("Peak Season", peak_value, peak_sub, "🏆")
+        # kpi_card("Peak Season", peak_value, peak_sub, "🏆")  # ← alternative
 
-    # --- Orientation cards ---
+    # --- Mini trend strip (adds motion right on the Intro) ---
+    if daily_f is not None and not daily_f.empty and "avg_temp_c" in daily_f.columns:
+        d = daily_f.sort_values("date").copy()
+        n = 14  # gentle smoothing for both lines
+        for col in ["bike_rides_daily", "avg_temp_c"]:
+            d[f"{col}_roll"] = d[col].rolling(n, min_periods=max(2, n // 2), center=True).mean()
+
+        fig_intro = make_subplots(specs=[[{"secondary_y": True}]])
+        fig_intro.add_trace(
+            go.Scatter(
+                x=d["date"],
+                y=d["bike_rides_daily_roll"].fillna(d["bike_rides_daily"]),
+                name="Daily rides",
+                mode="lines",
+                line=dict(color=RIDES_COLOR, width=2),
+            ),
+            secondary_y=False,
+        )
+        fig_intro.add_trace(
+            go.Scatter(
+                x=d["date"],
+                y=d["avg_temp_c_roll"].fillna(d["avg_temp_c"]),
+                name="Avg temp (°C)",
+                mode="lines",
+                line=dict(color=TEMP_COLOR, width=2, dash="dot"),
+                opacity=0.9,
+            ),
+            secondary_y=True,
+        )
+        fig_intro.update_layout(
+            height=280,
+            margin=dict(l=20, r=20, t=30, b=0),
+            hovermode="x unified",
+            showlegend=True,
+            title="Trend overview (14-day smoother)"
+        )
+        fig_intro.update_yaxes(title_text="Rides", secondary_y=False)
+        fig_intro.update_yaxes(title_text="Temp (°C)", secondary_y=True)
+        st.plotly_chart(fig_intro, use_container_width=True)
+
+    # --- Sharpened “What you’ll find here” copy ---
     st.markdown("### What you’ll find here")
     c1, c2, c3, c4 = st.columns(4)
-    c1.info("**Advanced KPIs**\n\nTotals, Avg/day, Temp↔Rides correlation.")
-    c2.info("**Weather Deep-Dive**\n\nScatter + fit, temperature bands.")
-    c3.info("**Station Intelligence**\n\nTop stations, Pareto, OD flows (Sankey/Matrix).")
-    c4.info("**Time Patterns**\n\nWeekday×Hour heatmap, seasonal/monthly swings.")
+    c1.info("**Decision-ready KPIs**\n\nTotals, avg/day, and a defensible temp↔rides correlation.")
+    c2.info("**Weather impact**\n\nTrend, scatter with fit, and comfort bands for clear takeaways.")
+    c3.info("**Station intelligence**\n\nTop stations, OD flows (Sankey/Matrix), and Pareto focus.")
+    c4.info("**Time patterns**\n\nWeekday×Hour heatmap + marginal profiles for staffing windows.")
     st.caption("Use the sidebar filters; every view updates live.")
 
 elif page == "Weather vs Bike Usage":
