@@ -282,9 +282,9 @@ def render_hero_panel():
         .hero-panel {
             background: linear-gradient(180deg, rgba(18,22,28,0.95) 0%, rgba(18,22,28,0.86) 100%);
             border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 22px;
+            border-radius: 24px;
             padding: 22px 24px;
-            box-shadow: 0 10px 26px rgba(0,0,0,0.38);
+            box-shadow: 0 8px 18px rgba(0,0,0,0.28);
             text-align: center;
         }
         .hero-title {
@@ -302,12 +302,12 @@ def render_hero_panel():
         .kpi-card {
             background: linear-gradient(180deg, rgba(25,31,40,0.80) 0%, rgba(16,21,29,0.86) 100%);
             border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 22px;
+            border-radius: 24px;
             padding: 16px 18px;
-            box-shadow: 0 10px 26px rgba(0,0,0,0.36);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.28);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
-            min-height: 190px;
+            min-height: 160px;
             display: flex; flex-direction: column; justify-content: space-between;
         }
         .kpi-title {
@@ -315,6 +315,7 @@ def render_hero_panel():
             color: #cbd5e1;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
             margin-bottom: 6px;
+            letter-spacing: .2px;
         }
         .kpi-value {
             font-size: clamp(1.25rem, 1.0rem + 1.2vw, 2.0rem);
