@@ -785,7 +785,7 @@ elif page == "Trip Flows Map":
             st.plotly_chart(fig_b, use_container_width=True)
 
         st.caption("Once you include `end_station_name`, this page will show OD Sankey and Source/Sink imbalance automatically.")
-        return  # end branch
+        st.stop()
 
     # ---------- Full OD widgets (runs only when end_station_name exists) ----------
 
