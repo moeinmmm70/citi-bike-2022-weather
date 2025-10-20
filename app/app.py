@@ -16,6 +16,33 @@ try:
 except Exception as _e:
     _KEPLER_OK, _KEPLER_ERR = False, str(_e)
 
+# --- Environment diagnostics / on-the-fly install (safe on Cloud) ---
+import sys, importlib.util, subprocess
+
+def ensure_pkg(name: str, version: str):
+    if importlib.util.find_spec(name) is None:
+        # Show in the UI what's happening
+        st.warning(f"Installing {name}=={version} …")
+        try:
+            subprocess.run([sys.executable, "-m", "pip", "install", f"{name}=={version}"], check=True)
+        except Exception as e:
+            st.error(f"Failed to install {name}: {e}")
+
+# Try to ensure kepler libs exist (only runs if not already installed)
+ensure_pkg("keplergl", "0.3.2")
+ensure_pkg("streamlit_keplergl", "0.3.1")
+
+# Re-attempt the import (updates your existing flags)
+try:
+    from keplergl import KeplerGl
+    from streamlit_keplergl import keplergl_static
+    _KEPLER_OK, _KEPLER_ERR = True, None
+except Exception as _e:
+    _KEPLER_OK, _KEPLER_ERR = False, str(_e)
+
+# Optional: show quick env info to confirm rebuild actually happened
+st.caption(f"Py {sys.version.split()[0]} • Kepler OK: {_KEPLER_OK} • Err: {_KEPLER_ERR or '—'}")
+
 # ────────────────────────────── Page/Theming ──────────────────────────────
 st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", page_icon="🚲", layout="wide")
 pio.templates.default = "plotly_white"
