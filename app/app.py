@@ -164,6 +164,72 @@ def _add_peak_annotation(fig, mat: pd.DataFrame, title_suffix=""):
         fig.update_layout(title=fig.layout.title.text + title_suffix)
     return fig
 
+def _time_slice(df: pd.DataFrame, mode: str) -> pd.DataFrame:
+    if "hour" not in df.columns or "weekday" not in df.columns:
+        return df
+    if mode == "AM (06–11)":   return df[(df["hour"] >= 6)  & (df["hour"] <= 11)]
+    if mode == "PM (16–20)":   return df[(df["hour"] >= 16) & (df["hour"] <= 20)]
+    if mode == "Weekend":      return df[df["weekday"].isin([5,6])]
+    if mode == "Weekday":      return df[df["weekday"].isin([0,1,2,3,4])]
+    return df
+
+def _build_od_edges(df: pd.DataFrame,
+                    per_origin: bool,
+                    topk: int,
+                    min_rides: int,
+                    drop_self_loops: bool,
+                    member_split: bool) -> pd.DataFrame:
+    if not {"start_station_name","end_station_name"}.issubset(df.columns):
+        return pd.DataFrame()
+
+    gb_cols = ["start_station_name", "end_station_name"]
+    if member_split and "member_type_display" in df.columns:
+        gb_cols.append("member_type_display")
+
+    agg = {
+        "ride_id": "size" if "ride_id" in df.columns else "size",
+    }
+    if "distance_km" in df.columns:   agg["distance_km"]  = "median"
+    if "duration_min" in df.columns:  agg["duration_min"] = "median"
+
+    g = (df.groupby(gb_cols).agg(agg).rename(columns={"ride_id":"rides"}).reset_index())
+
+    if drop_self_loops:
+        g = g[g["start_station_name"] != g["end_station_name"]]
+
+    # Apply min threshold early
+    g = g[g["rides"] >= int(min_rides)]
+
+    if per_origin:
+        # Take top-k per origin (and per member type if split)
+        by = ["start_station_name"] + (["member_type_display"] if (member_split and "member_type_display" in g.columns) else [])
+        g = (g.sort_values("rides", ascending=False)
+               .groupby(by, as_index=False)
+               .head(topk))
+    else:
+        g = g.sort_values("rides", ascending=False).head(topk)
+
+    # Nice columns
+    if "distance_km" in g.columns:
+        g.rename(columns={"distance_km":"med_distance_km"}, inplace=True)
+    if "duration_min" in g.columns:
+        g.rename(columns={"duration_min":"med_duration_min"}, inplace=True)
+
+    return g
+
+def _matrix_from_edges(edges: pd.DataFrame, member_split: bool) -> pd.DataFrame:
+    if edges.empty: return pd.DataFrame()
+    # If member-split, aggregate both groups to one matrix (you can add a toggle to choose single group)
+    base = edges.copy()
+    if member_split and "member_type_display" in base.columns:
+        base = base.groupby(["start_station_name","end_station_name"], as_index=False)["rides"].sum()
+    mat = (base.pivot(index="start_station_name", columns="end_station_name", values="rides")
+                 .fillna(0))
+    # Order rows/cols by totals for readability
+    row_order = mat.sum(axis=1).sort_values(ascending=False).index
+    col_order = mat.sum(axis=0).sort_values(ascending=False).index
+    return mat.loc[row_order, col_order]
+
 # UI helpers (Intro hero + KPI cards)
 def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
     st.markdown(
@@ -1129,40 +1195,198 @@ elif page == "Member vs Casual Profiles":
 
 elif page == "OD Flows (Sankey) & Matrix":
     st.header("🔀 Origin → Destination flows")
-    needed = {"start_station_name","end_station_name"}
-    if not needed.issubset(df_f.columns):
+
+    need = {"start_station_name","end_station_name"}
+    if not need.issubset(df_f.columns):
         st.info("Need start/end station names.")
     else:
-        topN = st.slider("Top N flows", 10, 200, 50, 10)
-        flows = (df_f.groupby(["start_station_name","end_station_name"])
-                      .size().rename("rides").reset_index()
-                      .sort_values("rides", ascending=False)
-                      .head(topN))
-        st.caption(f"Showing top {len(flows)} OD pairs by rides.")
+        # ── Controls
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            mode = st.selectbox("Time slice", ["All", "Weekday", "Weekend", "AM (06–11)", "PM (16–20)"], index=0)
+        with c2:
+            per_origin = st.checkbox("Top-k per origin", value=True, help="Keeps top edges from each origin station.")
+        with c3:
+            topk = st.slider("Top-k edges", 10, 300, 80, 10)
+        with c4:
+            member_split = st.checkbox("Split by Member Type", value=("member_type_display" in df_f.columns))
 
-        # Sankey
-        labs = pd.Index(pd.unique(flows[["start_station_name","end_station_name"]].values.ravel()))
-        lab_to_i = {s:i for i,s in enumerate(labs)}
-        src = flows["start_station_name"].map(lab_to_i)
-        tgt = flows["end_station_name"].map(lab_to_i)
-        fig = go.Figure(go.Sankey(
-            node=dict(label=labs.astype(str).tolist(), pad=6, thickness=12),
-            link=dict(source=src, target=tgt, value=flows["rides"].astype(int))
-        ))
-        fig.update_layout(height=650, title="Top OD flows (Sankey)")
-        st.plotly_chart(fig, use_container_width=True)
+        c5, c6, c7, c8 = st.columns(4)
+        with c5:
+            min_rides = st.number_input("Min rides per edge", min_value=1, max_value=1000, value=5, step=1)
+        with c6:
+            drop_loops = st.checkbox("Exclude self-loops", value=True)
+        with c7:
+            show_share = st.checkbox("Normalize to Share %", value=False, help="Normalize within the current slice before plotting.")
+        with c8:
+            log_matrix = st.checkbox("Matrix: log color", value=False, help="Use log10 scale to compress heavy tails.")
 
-        st.subheader("OD Matrix (interactive)")
-        keep_starts = flows["start_station_name"].unique().tolist()
-        keep_ends   = flows["end_station_name"].unique().tolist()
-        small = df_f[df_f["start_station_name"].isin(keep_starts) & df_f["end_station_name"].isin(keep_ends)]
-        mat = (small.groupby(["start_station_name","end_station_name"])
-                     .size().rename("rides").reset_index()
-                     .pivot(index="start_station_name", columns="end_station_name", values="rides").fillna(0))
-        figm = px.imshow(mat, aspect="auto", origin="lower",
-                         labels=dict(color="Rides"))
-        figm.update_layout(height=700)
-        st.plotly_chart(figm, use_container_width=True)
+        # Apply time slice on the already filtered df_f
+        sub = _time_slice(df_f, mode)
+
+        # Build edges
+        edges = _build_od_edges(
+            df=sub,
+            per_origin=per_origin,
+            topk=topk,
+            min_rides=min_rides,
+            drop_self_loops=drop_loops,
+            member_split=member_split
+        )
+
+        if edges.empty:
+            st.info("No OD edges for current filters.")
+            st.stop()
+
+        # Optional normalization to share %
+        if show_share:
+            denom = edges["rides"].sum()
+            if denom > 0:
+                edges["rides_share"] = edges["rides"] / denom * 100.0
+                value_col = "rides_share"
+                value_label = "Share (%)"
+            else:
+                value_col = "rides"
+                value_label = "Rides"
+        else:
+            value_col = "rides"
+            value_label = "Rides"
+
+        # ───────────────────────── Sankey ─────────────────────────
+        st.subheader("Sankey — top flows")
+        # Build node list
+        node_labels = pd.Index(
+            pd.unique(edges[["start_station_name","end_station_name"]].values.ravel())
+        )
+        node_index = {s:i for i,s in enumerate(node_labels)}
+        src = edges["start_station_name"].map(node_index)
+        tgt = edges["end_station_name"].map(node_index)
+
+        # Optional link colors: by member group or neutral
+        link_colors = None
+        if member_split and "member_type_display" in edges.columns:
+            # Simple mapping per group (member/casual)
+            color_map = {
+                "Member 🧑‍💼": "rgba(34,197,94,0.6)",  # green-ish
+                "Casual 🚲":   "rgba(37,99,235,0.6)",  # blue-ish
+            }
+            link_colors = edges["member_type_display"].map(color_map).fillna("rgba(160,160,160,0.5)").tolist()
+
+        sankey = go.Sankey(
+            node=dict(
+                label=node_labels.astype(str).tolist(),
+                pad=6, thickness=12
+            ),
+            link=dict(
+                source=src,
+                target=tgt,
+                value=edges[value_col].astype(float),
+                color=link_colors
+            )
+        )
+        f_sankey = go.Figure(sankey)
+        f_sankey.update_layout(
+            height=650,
+            title=f"Top flows — {value_label}" + (f" — {mode}" if mode!="All" else "") + (" — split by member" if member_split else "")
+        )
+        st.plotly_chart(f_sankey, use_container_width=True)
+
+        # ───────────────────────── OD Matrix ─────────────────────────
+        st.subheader("OD matrix")
+        mat = _matrix_from_edges(edges, member_split=member_split)
+        if not mat.empty:
+            mplot = mat.copy()
+            z = np.log10(mplot.values + 1) if log_matrix else mplot.values
+            figm = px.imshow(
+                z, aspect="auto", origin="lower",
+                labels=dict(color=("log10(Rides+1)" if log_matrix else "Rides"))
+            )
+            figm.update_xaxes(
+                tickmode="array",
+                tickvals=list(range(len(mplot.columns))),
+                ticktext=[str(x)[:24] for x in mplot.columns]
+            )
+            figm.update_yaxes(
+                tickmode="array",
+                tickvals=list(range(len(mplot.index))),
+                ticktext=[str(x)[:24] for x in mplot.index]
+            )
+            figm.update_layout(height=700, title="Origin × Destination")
+            st.plotly_chart(figm, use_container_width=True)
+
+        # ───────────────────────── Arc map (pydeck) ─────────────────────────
+        if {"start_lat","start_lng","end_lat","end_lng"}.issubset(df_f.columns):
+            st.subheader("🗺️ Map — OD arcs (width ∝ volume)")
+
+            import pydeck as pdk
+
+            # Station coords
+            start_coords = (df_f.groupby("start_station_name")[["start_lat","start_lng"]]
+                              .median().rename(columns={"start_lat":"s_lat","start_lng":"s_lng"}))
+            end_coords   = (df_f.groupby("end_station_name")[["end_lat","end_lng"]]
+                              .median().rename(columns={"end_lat":"e_lat","end_lng":"e_lng"}))
+
+            geo = (edges.join(start_coords, on="start_station_name", how="left")
+                        .join(end_coords,   on="end_station_name",   how="left")
+                        .dropna(subset=["s_lat","s_lng","e_lat","e_lng"])
+                        .copy())
+
+            if len(geo):
+                # Width scale
+                w_scale = st.slider("Arc width scale", 1, 30, 10)
+                geo["width"] = (w_scale * (np.sqrt(geo[value_col]) / np.sqrt(geo[value_col].max()))).clip(lower=0.5)
+                # Color by direction (blue) or member split if available
+                if member_split and "member_type_display" in geo.columns:
+                    geo["color"] = geo["member_type_display"].map({
+                        "Member 🧑‍💼": [34,197,94,200],
+                        "Casual 🚲":   [37,99,235,200],
+                    }).fillna([160,160,160,180])
+                else:
+                    geo["color"] = [[37,99,235,200]] * len(geo)
+
+                layer = pdk.Layer(
+                    "ArcLayer",
+                    data=geo,
+                    get_source_position="[s_lng, s_lat]",
+                    get_target_position="[e_lng, e_lat]",
+                    get_width="width",
+                    get_source_color="color",
+                    get_target_color="color",
+                    pickable=True,
+                    auto_highlight=True
+                )
+
+                view_state = pdk.ViewState(latitude=float(geo["s_lat"].append(geo["e_lat"]).median()),
+                                           longitude=float(geo["s_lng"].append(geo["e_lng"]).median()),
+                                           zoom=11, pitch=30)
+                deck = pdk.Deck(
+                    layers=[layer],
+                    initial_view_state=view_state,
+                    map_style="mapbox://styles/mapbox/dark-v11",
+                    tooltip={"html": "<b>{start_station_name}</b> → <b>{end_station_name}</b><br>"
+                                     f"{value_label}: {{{value_col}}}<br>"
+                                     "{{med_distance_km}} km • {{med_duration_min}} min"}
+                )
+                st.pydeck_chart(deck)
+            else:
+                st.info("No coordinates available for these edges.")
+
+        # ───────────────────────── Export ─────────────────────────
+        # Clean, order columns for export
+        export_cols = ["start_station_name","end_station_name","rides"]
+        if show_share:         export_cols.append("rides_share")
+        if member_split and "member_type_display" in edges.columns:
+            export_cols.insert(2, "member_type_display")
+        for c in ["med_distance_km","med_duration_min"]:
+            if c in edges.columns: export_cols.append(c)
+
+        csv_bytes = edges[export_cols].to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Download current OD edges (CSV)",
+            csv_bytes, "od_edges_current_view.csv", "text/csv"
+        )
+
+        st.caption("Tips: Use **Top-k per origin** to avoid one mega-station dominating; try **PM** with **Weekday** to view commute outflows; toggle **Share %** when comparing across time slices.")
 
 elif page == "Station Popularity":
     st.header("🚉 Most popular start stations")
