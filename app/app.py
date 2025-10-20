@@ -9,40 +9,6 @@ from plotly.subplots import make_subplots
 import plotly.io as pio
 import json, copy
 
-try:
-    from keplergl import KeplerGl
-    from streamlit_keplergl import keplergl_static
-    _KEPLER_OK, _KEPLER_ERR = True, None
-except Exception as _e:
-    _KEPLER_OK, _KEPLER_ERR = False, str(_e)
-
-# --- Environment diagnostics / on-the-fly install (safe on Cloud) ---
-import sys, importlib.util, subprocess
-
-def ensure_pkg(name: str, version: str):
-    if importlib.util.find_spec(name) is None:
-        # Show in the UI what's happening
-        st.warning(f"Installing {name}=={version} …")
-        try:
-            subprocess.run([sys.executable, "-m", "pip", "install", f"{name}=={version}"], check=True)
-        except Exception as e:
-            st.error(f"Failed to install {name}: {e}")
-
-# Try to ensure kepler libs exist (only runs if not already installed)
-ensure_pkg("keplergl", "0.3.2")
-ensure_pkg("streamlit_keplergl", "0.3.1")
-
-# Re-attempt the import (updates your existing flags)
-try:
-    from keplergl import KeplerGl
-    from streamlit_keplergl import keplergl_static
-    _KEPLER_OK, _KEPLER_ERR = True, None
-except Exception as _e:
-    _KEPLER_OK, _KEPLER_ERR = False, str(_e)
-
-# Optional: show quick env info to confirm rebuild actually happened
-st.caption(f"Py {sys.version.split()[0]} • Kepler OK: {_KEPLER_OK} • Err: {_KEPLER_ERR or '—'}")
-
 # ────────────────────────────── Page/Theming ──────────────────────────────
 st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", page_icon="🚲", layout="wide")
 pio.templates.default = "plotly_white"
@@ -621,229 +587,42 @@ elif page == "Pareto: Share of Rides":
         st.markdown("**Action:** prioritize inventory and maintenance on the head of the curve; treat the tail as on-demand.")
 
 elif page == "Trip Flows Map":
-    st.header("🗺️ Trip flows (Kepler.gl)")
+    st.header("🗺️ Trip flows (static Kepler HTML)")
     st.caption(
-        "Now using live Kepler rendering. Choose a **Map preset** (JSON) to switch layers/filters/camera. "
-        "Your **Analysis preset** below only affects the widgets/tables."
+        "This is a static export from Kepler.gl. The widgets below still respond to filters; "
+        "the embedded map itself won’t change."
     )
 
-    # ---------- Where to look for presets ----------
-    ROOT = Path(repo_root) if "repo_root" in globals() else Path.cwd()
-    preset_dir = ROOT / "reports" / "map"
+    # Where your exported map(s) live
+    MAP_HTMLS = [
+        Path("reports/map/citibike_trip_flows_2022.html"),
+        Path("reports/map/NYC_Bike_Trips_Aggregated.html"),
+    ]
 
-    if not preset_dir.exists():
-        st.error(f"Preset folder not found: {preset_dir}")
-        st.stop()
+    # Try to find a map html
+    path_to_html = next((p for p in MAP_HTMLS if p.exists()), None)
 
-    preset_files = sorted(preset_dir.glob("*.json"))
-    presets = {p.stem: p for p in preset_files}
-
-    if not presets:
-        st.error("No Kepler presets found in reports/map/.")
-        st.stop()
-
-    st.caption("✅ Found map presets: " + ", ".join(p.name for p in preset_files))
-
-    # ---------- Kepler map preset selector ----------
-    colA, colB = st.columns([1.2, 2.3])
-    with colA:
-        map_preset_name = st.selectbox("Map preset (Kepler JSON)", list(presets.keys()), index=0)
-    with colB:
-        st.caption("Switching this updates layers, filters, and camera instantly.")
-
-    # ---------- Load selected config and normalize dataset ids ----------
-    def load_config(path: Path) -> dict:
-        return json.loads(path.read_text(encoding="utf-8"))
-
-    def normalize_config_dataset_ids(cfg: dict, target_key: str = "trips") -> dict:
-        """Force all layers/filters to reference the in-app dataset key."""
-        cfg = copy.deepcopy(cfg)
-        vis = cfg.get("config", {}).get("visState", {})
-        for lyr in vis.get("layers", []):
-            if isinstance(lyr, dict) and "config" in lyr and "dataId" in lyr:
-                lyr["config"]["dataId"] = target_key
-        for flt in vis.get("filters", []):
-            if isinstance(flt, dict) and "dataId" in flt:
-                if isinstance(flt["dataId"], list):
-                    flt["dataId"] = [target_key for _ in flt["dataId"]]
-                else:
-                    flt["dataId"] = target_key
-        return cfg
-
-    raw_cfg = load_config(presets[map_preset_name])
-    cfg = normalize_config_dataset_ids(raw_cfg, target_key="trips")
-
-    # ---------- Your existing scenario (analysis) preset ----------
-    preset = st.selectbox(
-        "Analysis preset (applies to the widgets below)",
-        [
-            "AM commute (Weekdays 07–10) • fair weather",
-            "PM commute (Weekdays 16–19) • fair weather",
-            "Weekend leisure (Sat–Sun 10–18) • warm & dry",
-            "Rainy & cold days (all hours)",
-            "No extra preset (use sidebar filters only)",
-        ],
-        index=0,
-    )
-    bullets = {
-        "AM commute (Weekdays 07–10) • fair weather":
-            "- **Inbound flows** to CBD/transit hubs\n- **Source→Sink pairs** for AM rebalancing\n- Stage trucks on corridors",
-        "PM commute (Weekdays 16–19) • fair weather":
-            "- **Outbound flows** to residential clusters\n- Evening sinks that fill up\n- Compare vs AM for asymmetry",
-        "Weekend leisure (Sat–Sun 10–18) • warm & dry":
-            "- **Scenic corridors** (waterfront/parks)\n- Longer casual trips\n- Event adjacency effects",
-        "Rainy & cold days (all hours)":
-            "- **Demand drop** vs resilient OD pairs\n- Scale staffing down; watch hotspots",
-        "No extra preset (use sidebar filters only)":
-            "- Use sidebar filters to define a scenario; widgets update live",
-    }
-
-    # ---------- Column availability ----------
-    has_started_at = "started_at" in df_f.columns
-    has_date = "date" in df_f.columns
-    tempcol = next((c for c in ["avg_temp_c","avgTemp","avg_temp","temperature_c"] if c in df_f.columns), None)
-    precip_bin_col = "precip_bin" if "precip_bin" in df_f.columns else None
-    precip_raw = next((c for c in ["precip_mm","precipitation_mm","precip_mm_day","precipitation"] if c in df_f.columns), None)
-
-    def fair_weather_mask(df: pd.DataFrame) -> pd.Series:
-        m = pd.Series(True, index=df.index)
-        if tempcol is not None:
-            m &= df[tempcol].between(12, 26)
-        if precip_bin_col is not None:
-            m &= df[precip_bin_col].astype(str) != "High"
-        elif precip_raw is not None and df[precip_raw].notna().sum() > 10:
-            m &= (df[precip_raw] <= float(df[precip_raw].quantile(0.66)))
-        return m
-
-    def apply_preset_local(dfin: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
-        info: list[str] = []
-        if dfin.empty:
-            return dfin, ["No data after global (sidebar) filters."]
-        dfx = dfin.copy()
-
-        if has_started_at:
-            dt = pd.to_datetime(dfx["started_at"], errors="coerce")
-            dfx["_weekday"] = dt.dt.weekday
-            dfx["_hour"] = dt.dt.hour
-        elif has_date:
-            dt = pd.to_datetime(dfx["date"], errors="coerce")
-            dfx["_weekday"] = dt.dt.weekday
-            dfx["_hour"] = np.nan
-            info.append("No hour-level timestamps found — hour-based filters are skipped.")
-        else:
-            dfx["_weekday"] = np.nan
-            dfx["_hour"] = np.nan
-            info.append("No date/timestamp available — presets fall back to weather only.")
-
-        m = pd.Series(True, index=dfx.index)
-
-        if preset.startswith("AM commute"):
-            if dfx["_weekday"].notna().any(): m &= dfx["_weekday"] <= 4
-            else: info.append("Weekday filter skipped (no weekday).")
-            if has_started_at: m &= dfx["_hour"].between(7, 10, inclusive="left")
-            else: info.append("Hour window (07–10) skipped.")
-            fm = fair_weather_mask(dfx); m &= fm if fm.any() else m
-
-        elif preset.startswith("PM commute"):
-            if dfx["_weekday"].notna().any(): m &= dfx["_weekday"] <= 4
-            else: info.append("Weekday filter skipped (no weekday).")
-            if has_started_at: m &= dfx["_hour"].between(16, 19, inclusive="left")
-            else: info.append("Hour window (16–19) skipped.")
-            fm = fair_weather_mask(dfx); m &= fm if fm.any() else m
-
-        elif preset.startswith("Weekend leisure"):
-            if dfx["_weekday"].notna().any(): m &= dfx["_weekday"] >= 5
-            else: info.append("Weekend filter skipped (no weekday).")
-            if has_started_at: m &= dfx["_hour"].between(10, 18, inclusive="both")
-            else: info.append("Hour window (10–18) skipped.")
-            if tempcol is not None: m &= dfx[tempcol].between(18, 28)
-            if precip_bin_col is not None: m &= dfx[precip_bin_col].astype(str) == "Low"
-
-        elif preset.startswith("Rainy & cold"):
-            if tempcol is not None: m &= dfx[tempcol] < 8
-            if precip_bin_col is not None: m &= dfx[precip_bin_col].astype(str) == "High"
-            elif precip_raw is not None and dfx[precip_raw].notna().sum() > 10:
-                m &= dfx[precip_raw] >= float(dfx[precip_raw].quantile(0.66))
-
-        out = dfx[m] if m.any() else dfx.iloc[0:0].copy()
-        if out.empty:
-            info.append("Preset filters produced 0 rows. Try another preset or relax global filters.")
-        return out, info
-
-    dflow, preset_notes = apply_preset_local(df_f)
-    if preset_notes:
-        st.info("Preset notes:\n- " + "\n- ".join(preset_notes))
-
-    # ---------- Render Kepler with the selected map preset ----------
-    if _KEPLER_OK:
-        data_dict = {"trips": df_f}  # must match the dataId normalized in the config
-        m = KeplerGl(height=900, data=data_dict, config=cfg)
-        keplergl_static(m)
+    if not path_to_html:
+        st.info(
+            "Kepler.gl HTML not found.\n\nPlace one of:\n"
+            "- `reports/map/citibike_trip_flows_2022.html`\n"
+            "- `reports/map/NYC_Bike_Trips_Aggregated.html`"
+        )
     else:
-        st.warning(
-            "⚠️ Kepler live rendering is unavailable because the required packages aren't installed.\n\n"
-            f"Import error: `{_KEPLER_ERR}`\n\n"
-            "Add to `app/requirements.txt`:\n"
-            "    keplergl==0.3.2\n"
-            "    streamlit-keplergl==0.3.1\n\n"
-            "Falling back to the static exported map below."
-        )
-        path_to_html = None
-        for p in MAP_HTMLS:
-            if p.exists():
-                path_to_html = p
-                break
-        if path_to_html:
-            try:
-                html_data = Path(path_to_html).read_text(encoding="utf-8")
-                st.components.v1.html(html_data, height=900, scrolling=True)
-            except Exception as e:
-                st.error(f"Failed to load map HTML: {e}")
-        else:
-            st.info(
-                "No Kepler.gl HTML found.\n\nExpected at one of:\n"
-                "- `reports/map/citibike_trip_flows_2022.html`\n"
-                "- `reports/map/NYC_Bike_Trips_Aggregated.html`"
-            )
+        try:
+            html_data = Path(path_to_html).read_text(encoding="utf-8")
+            st.components.v1.html(html_data, height=900, scrolling=True)
+        except Exception as e:
+            st.error(f"Failed to load map HTML: {e}")
 
-    # ---------- Context ----------
-    st.markdown("### 🎯 What to look for")
-    st.markdown(bullets.get(preset, ""))
     st.markdown("---")
-
-    # ---------- Branch: do we have end_station_name? ----------
-    have_od = {"start_station_name", "end_station_name"}.issubset(dflow.columns)
-    if not have_od:
-        st.warning(
-            "This sample file lacks `end_station_name`. OD Sankey and station imbalance need both "
-            "`start_station_name` **and** `end_station_name`.\n\n"
-            "👉 **Workaround shown below:** Origin Hotspots & AM/PM origin load. "
-            "To unlock full OD analysis, regenerate the reduced CSV keeping at least:\n"
-            "`ride_id, started_at, start_station_name, end_station_name, date, avg_temp_c, member_type, season`"
-        )
-
-        if ("started_at" in dflow.columns) and not dflow.empty:
-            st.subheader("⏰ AM vs PM origin load (weekdays)")
-            dtx = pd.to_datetime(dflow["started_at"], errors="coerce")
-            weekdays = dtx.dt.weekday <= 4
-            hours = dtx.dt.hour
-            bands = pd.cut(
-                hours,
-                bins=[0,7,10,16,19,24],
-                labels=["pre-AM","AM(7-10)","midday","PM(16-19)","late"],
-                right=False
-            )
-            tbl = dflow.loc[weekdays].assign(band=bands).groupby("band").size().reindex(
-                ["pre-AM","AM(7-10)","midday","PM(16-19)","late"]
-            ).fillna(0).rename("rides").reset_index()
-
-            fig_b = go.Figure(go.Bar(x=tbl["band"], y=tbl["rides"], text=tbl["rides"], textposition="outside"))
-            fig_b.update_layout(height=420, title="Weekday origin load by time band")
-            fig_b.update_yaxes(title="Rides (count)")
-            st.plotly_chart(fig_b, use_container_width=True)
-
-        st.caption("Once you include `end_station_name`, this page will show OD Sankey and Source/Sink imbalance automatically.")
-        st.stop()
+    st.markdown("### 🎯 What to look for")
+    st.markdown(
+        "- **Inbound AM flows** into CBD/transit hubs\n"
+        "- **Outbound PM flows** to residential clusters\n"
+        "- **Weekend corridors** (waterfront/parks); longer casual trips\n"
+        "- Watch **rain/cold** demand drop vs resilient OD pairs"
+    )
 
 elif page == "Weekday × Hour Heatmap":
     st.header("⏰ Temporal load — weekday × start hour")
