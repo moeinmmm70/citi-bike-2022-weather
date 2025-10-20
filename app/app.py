@@ -1,7 +1,5 @@
 # app/st_dashboard_Part_2.py
 from pathlib import Path
-import json, copy
-from math import radians
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -31,6 +29,7 @@ MEMBER_LABELS = {
     "casual": "Casual 🚲",
 }
 MEMBER_LEGEND_TITLE = "Member Type"
+
 # ────────────────────────────── Helpers ───────────────────────────────────
 def kfmt(x):
     try:
@@ -84,21 +83,8 @@ def show_cover(cover_path: Path):
         st.image(str(cover_path), use_column_width=True,
                  caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com")
 
-def quantile_bounds(s: pd.Series, lo=0.01, hi=0.995):
-    s = pd.to_numeric(s, errors="coerce")
-    ql, qh = s.quantile(lo), s.quantile(hi)
-    return float(ql), float(qh)
-
-def inlier_mask(df: pd.DataFrame, col: str, lo=0.01, hi=0.995):
-    if col not in df.columns:
-        return pd.Series([True]*len(df), index=df.index)
-    s = pd.to_numeric(df[col], errors="coerce")
-    ql, qh = quantile_bounds(s, lo, hi)
-    return (s >= ql) & (s <= qh)
-
-# ── UI helpers (Intro hero + KPI cards)
+# UI helpers (Intro hero + KPI cards)
 def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
-    """Bigger card height, slightly smaller fonts so the text fits."""
     st.markdown(
         f"""
         <div class="kpi-card">
@@ -111,11 +97,9 @@ def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
     )
 
 def render_hero_panel():
-    """Centered hero title panel with smaller text (original title)."""
     st.markdown(
         """
         <style>
-        /* Hero Panel */
         .hero-panel {
             background: linear-gradient(180deg, rgba(18,22,28,0.95) 0%, rgba(18,22,28,0.86) 100%);
             border: 1px solid rgba(255,255,255,0.08);
@@ -136,8 +120,6 @@ def render_hero_panel():
             font-size: clamp(.85rem, .8rem + .3vw, 1.0rem);
             margin: 0;
         }
-
-        /* KPI cards */
         .kpi-card {
             background: linear-gradient(180deg, rgba(25,31,40,0.80) 0%, rgba(16,21,29,0.86) 100%);
             border: 1px solid rgba(255,255,255,0.08);
@@ -168,7 +150,6 @@ def render_hero_panel():
             margin-top: 6px;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
-
         .element-container img { border-radius: 16px; }
         </style>
         <div class="hero-panel">
@@ -225,7 +206,7 @@ def load_data(path: Path, _sig: float | None = None) -> pd.DataFrame:
     if "started_at" in df.columns:
         ts = df["started_at"]
         df["hour"]    = ts.dt.hour
-        df["weekday"] = ts.dt.weekday      # 0=Mon
+        df["weekday"] = ts.dt.weekday
         df["month"]   = ts.dt.to_period("M").dt.to_timestamp()
 
     # Categories for perf
@@ -237,10 +218,10 @@ def load_data(path: Path, _sig: float | None = None) -> pd.DataFrame:
     if "member_type" in df.columns:
         df["member_type_display"] = (
             df["member_type"].astype(str)
-               .map(MEMBER_LABELS)
-               .fillna(df["member_type"].astype(str).str.title())
+              .map(MEMBER_LABELS)
+              .fillna(df["member_type"].astype(str).str.title())
         ).astype("category")
-        
+
     return df
 
 def ensure_daily(df: pd.DataFrame) -> pd.DataFrame | None:
@@ -272,12 +253,24 @@ def apply_filters(df: pd.DataFrame,
     return out
 
 def compute_core_kpis(df_f: pd.DataFrame, daily_f: pd.DataFrame | None):
-    # Total rides from trip-level rows
     total_rides = len(df_f)
     avg_day = float(daily_f["bike_rides_daily"].mean()) if daily_f is not None and not daily_f.empty else None
     corr_tr = safe_corr(daily_f.set_index("date")["bike_rides_daily"], daily_f.set_index("date")["avg_temp_c"]) \
               if daily_f is not None and "avg_temp_c" in daily_f.columns else None
     return dict(total_rides=total_rides, avg_day=avg_day, corr_tr=corr_tr)
+
+# Robust plotting helpers
+def quantile_bounds(s: pd.Series, lo=0.01, hi=0.995):
+    s = pd.to_numeric(s, errors="coerce")
+    ql, qh = s.quantile(lo), s.quantile(hi)
+    return float(ql), float(qh)
+
+def inlier_mask(df: pd.DataFrame, col: str, lo=0.01, hi=0.995):
+    if col not in df.columns:
+        return pd.Series([True]*len(df), index=df.index)
+    s = pd.to_numeric(df[col], errors="coerce")
+    ql, qh = quantile_bounds(s, lo, hi)
+    return (s >= ql) & (s <= qh)
 
 # ────────────────────────────── Sidebar / Data ─────────────────────────────
 st.sidebar.header("⚙️ Controls")
@@ -298,7 +291,7 @@ date_range = st.sidebar.date_input("Date range", value=(date_min, date_max)) if 
 seasons_all = ["Winter","Spring","Summer","Autumn"]
 seasons = st.sidebar.multiselect("Season(s)", seasons_all, default=seasons_all) if "season" in df.columns else None
 
-# Member type
+# Member type (pretty labels; raw value for filtering)
 usertype = None
 if "member_type" in df.columns:
     raw_opts = ["All"] + sorted(df["member_type"].astype(str).unique().tolist())
@@ -345,17 +338,13 @@ daily_f   = ensure_daily(df_f)
 
 # ────────────────────────────── Pages ──────────────────────────────────────
 if page == "Intro":
-    # Centered hero panel (original title), smaller text
     render_hero_panel()
-
-    # Cover image under hero
     show_cover(cover_path)
     st.caption("⚙️ Powered by NYC Citi Bike data • 365 days • Interactive visuals")
 
-    # Compute KPIs for cards
     KPIs = compute_core_kpis(df_f, daily_f)
 
-    # Weather Impact (% uplift good vs bad) — simple temp bands if available
+    # Simple weather uplift
     weather_uplift_pct = None
     if daily_f is not None and not daily_f.empty and "avg_temp_c" in daily_f.columns:
         comfy = daily_f.loc[(daily_f["avg_temp_c"] >= 15) & (daily_f["avg_temp_c"] <= 25), "bike_rides_daily"].mean()
@@ -376,7 +365,6 @@ if page == "Intro":
             peak_value = f"{m.index[0]}"
             peak_sub   = f"{kfmt(m.iloc[0])} avg trips"
 
-    # KPI cards
     cA, cB, cC, cD, cE = st.columns(5)
     with cA: kpi_card("Total Trips", kfmt(KPIs["total_rides"]), "Across all stations", "🧮")
     with cB: kpi_card("Daily Average", kfmt(KPIs["avg_day"]) if KPIs["avg_day"] is not None else "—", "Trips per day", "📅")
@@ -437,13 +425,13 @@ elif page == "Weather vs Bike Usage":
         st.markdown("**So what?** Warm days lift demand; shoulder seasons show the steepest slope. Staff rebalancing accordingly.")
 
 elif page == "Trip Metrics (Duration • Distance • Speed)":
-    st.header("🚴 Trip metrics (Duration • Distance • Speed)")
+    st.header("🚴 Trip metrics (robust view)")
 
     need = {"duration_min","distance_km","speed_kmh"}
     if not need.issubset(df_f.columns):
         st.info("Need duration, distance, and speed (engineered in load_data).")
     else:
-        # --- Controls
+        # Controls
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             robust = st.checkbox("Robust clipping (99.5%)", value=True, help="Hide extreme outliers that crush the axes.")
@@ -454,24 +442,17 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
         with c4:
             log_speed = st.checkbox("Log X: Speed", value=False)
 
-        # --- Build inlier masks (independent per metric)
-        m_dur = inlier_mask(df_f, "duration_min", hi=0.995) if robust else pd.Series(True, index=df_f.index)
-        m_dst = inlier_mask(df_f, "distance_km", hi=0.995)  if robust else pd.Series(True, index=df_f.index)
-        m_spd = inlier_mask(df_f, "speed_kmh",   hi=0.995)  if robust else pd.Series(True, index=df_f.index)
+        # Inlier masks + physical bounds
+        m_dur = (inlier_mask(df_f, "duration_min", hi=0.995) if robust else pd.Series(True, index=df_f.index)) & \
+                df_f["duration_min"].between(0.5, 240, inclusive="both")
+        m_dst = (inlier_mask(df_f, "distance_km", hi=0.995)  if robust else pd.Series(True, index=df_f.index)) & \
+                df_f["distance_km"].between(0.01, 30, inclusive="both")
+        m_spd = (inlier_mask(df_f, "speed_kmh",   hi=0.995)  if robust else pd.Series(True, index=df_f.index)) & \
+                df_f["speed_kmh"].between(0.5, 60, inclusive="both")
 
-        # Also drop impossible/garbage values for plotting
-        m_dur &= df_f["duration_min"].between(0.5, 240, inclusive="both")   # keep 0.5–240 min
-        m_dst &= df_f["distance_km"].between(0.01, 30, inclusive="both")    # keep 10 m – 30 km
-        m_spd &= df_f["speed_kmh"].between(0.5, 60, inclusive="both")       # keep 0.5–60 km/h
+        clipped_dur = int((~m_dur).sum()); clipped_dst = int((~m_dst).sum()); clipped_spd = int((~m_spd).sum())
 
-        # Count clipped rows
-        clipped_dur = int((~m_dur).sum())
-        clipped_dst = int((~m_dst).sum())
-        clipped_spd = int((~m_spd).sum())
-
-        # --- Histograms (robust ranges + optional log)
         cA, cB, cC = st.columns(3)
-
         with cA:
             d = df_f.loc[m_dur, "duration_min"]
             ql, qh = d.quantile([0.01, 0.995]).tolist()
@@ -505,27 +486,27 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
             st.plotly_chart(fig, use_container_width=True)
             st.caption(f"Clipped rows (speed): {clipped_spd:,}")
 
-        # --- Scatter: distance vs duration (show inliers + faint outliers)
+        # Scatter: distance vs duration (by member type)
         st.subheader("Distance vs duration (by member type)")
-        color_col = "member_type" if "member_type" in df_f.columns else None
+        color_col = "member_type_display" if "member_type_display" in df_f.columns else None
 
         inliers = df_f[m_dst & m_dur].copy()
         outliers = df_f[~(m_dst & m_dur)].copy()
 
-        # sample for speed
         nmax = 30000
         if len(inliers) > nmax:
             inliers = inliers.sample(n=nmax, random_state=3)
 
-        fig2 = px.scatter(inliers, x="distance_km", y="duration_min", color=color_col,
-                          labels={"distance_km":"Distance (km)", "duration_min":"Duration (min)", "member_type_display": MEMBER_LEGEND_TITLE},
-                          opacity=0.9)
+        fig2 = px.scatter(
+            inliers, x="distance_km", y="duration_min", color=color_col,
+            labels={"distance_km":"Distance (km)", "duration_min":"Duration (min)", "member_type_display": MEMBER_LEGEND_TITLE},
+            opacity=0.9
+        )
         if len(outliers):
             fig2.add_trace(go.Scatter(
                 x=outliers["distance_km"], y=outliers["duration_min"],
                 mode="markers", name="Outliers", opacity=0.15, marker=dict(size=6)
             ))
-        # lock axes to inlier range to prevent auto-expansion
         xql, xqh = inliers["distance_km"].quantile([0.01, 0.995]).tolist()
         yql, yqh = inliers["duration_min"].quantile([0.01, 0.995]).tolist()
         fig2.update_xaxes(range=[xql, xqh])
@@ -533,7 +514,7 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
         fig2.update_layout(height=520)
         st.plotly_chart(fig2, use_container_width=True)
 
-        # --- Optional: Speed vs temperature (also robust)
+        # Optional: Speed vs temperature (robust)
         if "avg_temp_c" in df_f.columns:
             st.subheader("Speed vs temperature")
             m_temp = df_f["avg_temp_c"].between(df_f["avg_temp_c"].quantile(0.01),
@@ -541,9 +522,11 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
             in2 = df_f[m_spd & m_temp]
             if len(in2) > nmax:
                 in2 = in2.sample(n=nmax, random_state=4)
-            fig3 = px.scatter(in2, x="avg_temp_c", y="speed_kmh", color=color_col,
-                              labels={"avg_temp_c":"Avg temperature (°C)", "speed_kmh":"Speed (km/h)", "member_type_display": MEMBER_LEGEND_TITLE},
-                              opacity=0.85)
+            fig3 = px.scatter(
+                in2, x="avg_temp_c", y="speed_kmh", color=color_col,
+                labels={"avg_temp_c":"Avg temperature (°C)", "speed_kmh":"Speed (km/h)", "member_type_display": MEMBER_LEGEND_TITLE},
+                opacity=0.85
+            )
             fig3.update_layout(height=520)
             st.plotly_chart(fig3, use_container_width=True)
 
@@ -551,35 +534,38 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
 
 elif page == "Member vs Casual Profiles":
     st.header("👥 Member vs Casual riding patterns")
-    if "member_type" not in df_f.columns or "hour" not in df_f.columns:
+    if "member_type_display" not in df_f.columns or "hour" not in df_f.columns:
         st.info("Need `member_type` and `started_at` (engineered hour).")
     else:
         st.subheader("Hourly profile")
         g = (df_f.groupby(["member_type_display","hour"]).size().rename("rides").reset_index())
-        fig = px.line(g, x="hour", y="rides", color="member_type_display",
-                      labels={"hour":"Hour of day", "rides":"Rides", "member_type_display": MEMBER_LEGEND_TITLE})
+        fig = px.line(
+            g, x="hour", y="rides", color="member_type_display",
+            labels={"hour":"Hour of day", "rides":"Rides", "member_type_display": MEMBER_LEGEND_TITLE}
+        )
         fig.update_layout(height=420)
         st.plotly_chart(fig, use_container_width=True)
 
         st.subheader("Weekday profile")
         g2 = (df_f.groupby(["member_type_display","weekday"]).size().rename("rides").reset_index())
         g2["weekday_name"] = g2["weekday"].map({0:"Mon",1:"Tue",2:"Wed",3:"Thu",4:"Fri",5:"Sat",6:"Sun"})
-        fig2 = px.line(g2, x="weekday_name", y="rides", color="member_type_display",
-                       labels={"weekday_name":"Weekday","rides":"Rides", "member_type_display": MEMBER_LEGEND_TITLE})
+        fig2 = px.line(
+            g2, x="weekday_name", y="rides", color="member_type_display",
+            labels={"weekday_name":"Weekday","rides":"Rides","member_type_display": MEMBER_LEGEND_TITLE}
+        )
         fig2.update_layout(height=420)
         st.plotly_chart(fig2, use_container_width=True)
 
-        if "rideable_type" in df_f.columns:
+        if "rideable_type" in df_f.columns and "season" in df_f.columns:
             st.subheader("Rideable type mix by season")
-            if "season" not in df_f.columns:
-                st.caption("No `season` column.")
-            else:
-                g3 = (df_f.groupby(["season","member_type_display","rideable_type"]).size().rename("rides").reset_index())
-                fig3 = px.bar(g3, x="season", y="rides", color="rideable_type", barmode="relative",
-                              facet_col="member_type_display", facet_col_wrap=2,
-                              labels={"rides":"Rides","season":"Season","rideable_type":"Bike type", "member_type_display": MEMBER_LEGEND_TITLE})
-                fig3.update_layout(height=600)
-                st.plotly_chart(fig3, use_container_width=True)
+            g3 = (df_f.groupby(["season","member_type_display","rideable_type"]).size().rename("rides").reset_index())
+            fig3 = px.bar(
+                g3, x="season", y="rides", color="rideable_type", barmode="relative",
+                facet_col="member_type_display", facet_col_wrap=2,
+                labels={"rides":"Rides","season":"Season","rideable_type":"Bike type","member_type_display": MEMBER_LEGEND_TITLE}
+            )
+            fig3.update_layout(height=600)
+            st.plotly_chart(fig3, use_container_width=True)
 
 elif page == "OD Flows (Sankey) & Matrix":
     st.header("🔀 Origin → Destination flows")
@@ -607,7 +593,6 @@ elif page == "OD Flows (Sankey) & Matrix":
         st.plotly_chart(fig, use_container_width=True)
 
         st.subheader("OD Matrix (interactive)")
-        # small pivot to keep it responsive
         keep_starts = flows["start_station_name"].unique().tolist()
         keep_ends   = flows["end_station_name"].unique().tolist()
         small = df_f[df_f["start_station_name"].isin(keep_starts) & df_f["end_station_name"].isin(keep_ends)]
@@ -684,7 +669,6 @@ elif page == "Station Imbalance (In vs Out)":
 
         if {"start_lat","start_lng"}.issubset(df_f.columns):
             st.subheader("Map — stations sized by net IN/OUT")
-            # approximate station coords from starts
             coords = (df_f.groupby("start_station_name")[["start_lat","start_lng"]]
                           .median().rename(columns={"start_lat":"lat","start_lng":"lon"}))
             m = biggest.join(coords, on="station", how="left")
