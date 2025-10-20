@@ -645,6 +645,7 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
 
         clipped_dur = int((~m_dur).sum()); clipped_dst = int((~m_dst).sum()); clipped_spd = int((~m_spd).sum())
 
+        # ===== Histograms (robust) =====
         cA, cB, cC = st.columns(3)
         with cA:
             d = df_f.loc[m_dur, "duration_min"]
@@ -679,7 +680,7 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
             st.plotly_chart(fig, use_container_width=True)
             st.caption(f"Clipped rows (speed): {clipped_spd:,}")
 
-        # Scatter: distance vs duration (by member type)
+        # ===== Scatter: distance vs duration (by member type) =====
         st.subheader("Distance vs duration (by member type)")
         color_col = "member_type_display" if "member_type_display" in df_f.columns else None
 
@@ -707,21 +708,166 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
         fig2.update_layout(height=520)
         st.plotly_chart(fig2, use_container_width=True)
 
-        # Optional: Speed vs temperature (robust)
-        if "avg_temp_c" in df_f.columns:
-            st.subheader("Speed vs temperature")
-            m_temp = df_f["avg_temp_c"].between(df_f["avg_temp_c"].quantile(0.01),
-                                                df_f["avg_temp_c"].quantile(0.995))
-            in2 = df_f[m_spd & m_temp]
-            if len(in2) > nmax:
-                in2 = in2.sample(n=nmax, random_state=4)
-            fig3 = px.scatter(
-                in2, x="avg_temp_c", y="speed_kmh", color=color_col,
-                labels={"avg_temp_c":"Avg temperature (°C)", "speed_kmh":"Speed (km/h)", "member_type_display": MEMBER_LEGEND_TITLE},
-                opacity=0.85
-            )
-            fig3.update_layout(height=520)
-            st.plotly_chart(fig3, use_container_width=True)
+        # ===== Weather relationships (new) =====
+        def _add_fit_line(fig_, xvals, yvals, name):
+            # robust: require at least 3 valid points and 2 unique x's
+            x = pd.to_numeric(xvals, errors="coerce")
+            y = pd.to_numeric(yvals, errors="coerce")
+            ok = x.notna() & y.notna()
+            if ok.sum() >= 3 and x[ok].nunique() >= 2:
+                a, b = np.polyfit(x[ok], y[ok], 1)
+                xs = np.linspace(x[ok].min(), x[ok].max(), 100)
+                ys = a * xs + b
+                fig_.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name=name, line=dict(dash="dash")))
+            return fig_
+
+        st.subheader("Weather relationships")
+        c1, c2 = st.columns(2)
+
+        temp_ok = "avg_temp_c" in df_f.columns and df_f["avg_temp_c"].notna().any()
+        wind_ok = "wind_kph"   in df_f.columns and df_f["wind_kph"].notna().any()
+
+        # Speed vs temperature
+        with c1:
+            if temp_ok:
+                dat = df_f[m_spd & df_f["avg_temp_c"].notna()]
+                if len(dat) > nmax: dat = dat.sample(n=nmax, random_state=4)
+                figt = px.scatter(
+                    dat, x="avg_temp_c", y="speed_kmh",
+                    color=color_col, opacity=0.7,
+                    labels={"avg_temp_c":"Avg temperature (°C)", "speed_kmh":"Speed (km/h)", "member_type_display": MEMBER_LEGEND_TITLE}
+                )
+                figt = _add_fit_line(figt, dat["avg_temp_c"], dat["speed_kmh"], "Linear fit")
+                figt.update_layout(height=480, title="Speed vs Temperature")
+                st.plotly_chart(figt, use_container_width=True)
+            else:
+                st.info("No temperature column available for this view.")
+
+        # Speed vs wind
+        with c2:
+            if wind_ok:
+                dat = df_f[m_spd & df_f["wind_kph"].notna()]
+                if len(dat) > nmax: dat = dat.sample(n=nmax, random_state=5)
+                figw = px.scatter(
+                    dat, x="wind_kph", y="speed_kmh",
+                    color=color_col, opacity=0.7,
+                    labels={"wind_kph":"Wind (kph)", "speed_kmh":"Speed (km/h)", "member_type_display": MEMBER_LEGEND_TITLE}
+                )
+                figw = _add_fit_line(figw, dat["wind_kph"], dat["speed_kmh"], "Linear fit")
+                figw.update_layout(height=480, title="Speed vs Wind")
+                st.plotly_chart(figw, use_container_width=True)
+            else:
+                st.info("No wind column available for this view.")
+
+        # Distance/Duration vs Temperature (optional, helps tell comfort story)
+        c3, c4 = st.columns(2)
+        with c3:
+            if temp_ok:
+                dat = df_f[m_dur & df_f["avg_temp_c"].notna()]
+                if len(dat) > nmax: dat = dat.sample(n=nmax, random_state=6)
+                figdt = px.scatter(
+                    dat, x="avg_temp_c", y="duration_min",
+                    color=color_col, opacity=0.6,
+                    labels={"avg_temp_c":"Avg temperature (°C)", "duration_min":"Duration (min)", "member_type_display": MEMBER_LEGEND_TITLE}
+                )
+                figdt = _add_fit_line(figdt, dat["avg_temp_c"], dat["duration_min"], "Linear fit")
+                figdt.update_layout(height=420, title="Duration vs Temperature")
+                st.plotly_chart(figdt, use_container_width=True)
+
+        with c4:
+            if temp_ok:
+                dat = df_f[m_dst & df_f["avg_temp_c"].notna()]
+                if len(dat) > nmax: dat = dat.sample(n=nmax, random_state=7)
+                figDxT = px.scatter(
+                    dat, x="avg_temp_c", y="distance_km",
+                    color=color_col, opacity=0.6,
+                    labels={"avg_temp_c":"Avg temperature (°C)", "distance_km":"Distance (km)", "member_type_display": MEMBER_LEGEND_TITLE}
+                )
+                figDxT = _add_fit_line(figDxT, dat["avg_temp_c"], dat["distance_km"], "Linear fit")
+                figDxT.update_layout(height=420, title="Distance vs Temperature")
+                st.plotly_chart(figDxT, use_container_width=True)
+
+        # ===== Rain/Wet impact on duration & speed =====
+        st.subheader("Rain impact on trip characteristics")
+        has_precip_bin = ("precip_bin" in df_f.columns) and df_f["precip_bin"].notna().any()
+        has_wet_flag   = ("wet_day" in df_f.columns)
+
+        if has_precip_bin or has_wet_flag:
+            cc1, cc2 = st.columns(2)
+
+            # Duration boxes
+            with cc1:
+                if has_precip_bin:
+                    figpb = px.box(
+                        df_f[m_dur], x="precip_bin", y="duration_min",
+                        category_orders={"precip_bin":["Low","Medium","High"]},
+                        labels={"precip_bin":"Precipitation", "duration_min":"Duration (min)"}
+                    )
+                    figpb.update_layout(height=420, title="Duration by Precipitation")
+                    st.plotly_chart(figpb, use_container_width=True)
+                elif has_wet_flag:
+                    figwd = px.box(
+                        df_f[m_dur].assign(day_type=lambda x: x["wet_day"].map({0:"Dry",1:"Wet"})),
+                        x="day_type", y="duration_min",
+                        labels={"day_type":"Day type", "duration_min":"Duration (min)"}
+                    )
+                    figwd.update_layout(height=420, title="Duration: Wet vs Dry")
+                    st.plotly_chart(figwd, use_container_width=True)
+
+            # Speed boxes
+            with cc2:
+                if has_precip_bin:
+                    figpbs = px.box(
+                        df_f[m_spd], x="precip_bin", y="speed_kmh",
+                        category_orders={"precip_bin":["Low","Medium","High"]},
+                        labels={"precip_bin":"Precipitation", "speed_kmh":"Speed (km/h)"}
+                    )
+                    figpbs.update_layout(height=420, title="Speed by Precipitation")
+                    st.plotly_chart(figpbs, use_container_width=True)
+                elif has_wet_flag:
+                    figwds = px.box(
+                        df_f[m_spd].assign(day_type=lambda x: x["wet_day"].map({0:"Dry",1:"Wet"})),
+                        x="day_type", y="speed_kmh",
+                        labels={"day_type":"Day type", "speed_kmh":"Speed (km/h)"}
+                    )
+                    figwds.update_layout(height=420, title="Speed: Wet vs Dry")
+                    st.plotly_chart(figwds, use_container_width=True)
+        else:
+            st.info("No precipitation flags available to show rain impact.")
+
+        # ===== Quick weather deltas (KPIs) =====
+        k1, k2, k3, k4 = st.columns(4)
+        # Wet vs Dry (speed)
+        with k1:
+            if has_wet_flag and df_f["wet_day"].notna().any():
+                dry_spd = df_f.loc[m_spd & (df_f["wet_day"]==0), "speed_kmh"].mean()
+                wet_spd = df_f.loc[m_spd & (df_f["wet_day"]==1), "speed_kmh"].mean()
+                if pd.notnull(dry_spd) and pd.notnull(wet_spd) and dry_spd>0:
+                    st.metric("Speed: Wet vs Dry", f"{(wet_spd-dry_spd)/dry_spd*100:+.1f}%")
+
+        # Windy vs Calm (speed)
+        with k2:
+            if wind_ok:
+                calm_spd   = df_f.loc[m_spd & (df_f["wind_kph"]<10),  "speed_kmh"].mean()
+                windy_spd  = df_f.loc[m_spd & (df_f["wind_kph"]>=20), "speed_kmh"].mean()
+                if pd.notnull(calm_spd) and pd.notnull(windy_spd) and calm_spd>0:
+                    st.metric("Speed: Windy (≥20) vs Calm (<10)", f"{(windy_spd-calm_spd)/calm_spd*100:+.1f}%")
+
+        # Comfy vs Extreme temps (speed)
+        with k3:
+            if temp_ok:
+                comfy = df_f.loc[m_spd & df_f["avg_temp_c"].between(15,25), "speed_kmh"].mean()
+                extreme = df_f.loc[m_spd & (~df_f["avg_temp_c"].between(5,30)), "speed_kmh"].mean()
+                if pd.notnull(comfy) and pd.notnull(extreme):
+                    st.metric("Speed: Comfy (15–25°C) vs Extreme", f"{(comfy-extreme)/comfy*100:+.1f}%")
+
+        # Rain effect on duration (optional)
+        with k4:
+            if has_precip_bin:
+                low_dur  = df_f.loc[m_dur & (df_f["precip_bin"]=="Low"), "duration_min"].mean()
+                high_dur = df_f.loc[m_dur & (df_f["precip_bin"]=="High"), "duration_min"].mean()
+                if pd.notnull(low_dur) and pd.notnull(high_dur) and low_dur>0:
+                    st.metric("Duration: High rain vs Low", f"{(high_dur-low_dur)/low_dur*100:+.1f}%")
 
         st.caption("Robust view clips only for plotting. All rows remain available for other pages/exports.")
 
