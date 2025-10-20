@@ -179,44 +179,63 @@ def _build_od_edges(df: pd.DataFrame,
                     min_rides: int,
                     drop_self_loops: bool,
                     member_split: bool) -> pd.DataFrame:
-    if not {"start_station_name","end_station_name"}.issubset(df.columns):
-        return pd.DataFrame()
+    # Guard
+    need = {"start_station_name", "end_station_name"}
+    if not need.issubset(df.columns) or df.empty:
+        return pd.DataFrame(columns=["start_station_name","end_station_name","rides"])
 
     gb_cols = ["start_station_name", "end_station_name"]
     if member_split and "member_type_display" in df.columns:
         gb_cols.append("member_type_display")
 
+    # Count rides
+    g = (df.dropna(subset=["start_station_name","end_station_name"])
+           .groupby(gb_cols).size().rename("rides").reset_index())
+
+    # Optional medians if available
+    if "distance_km" in df.columns:
+        med_dist = df.groupby(gb_cols)["distance_km"].median().reset_index(name="med_distance_km")
+        g = g.merge(med_dist, on=gb_cols, how="left")
+    if "duration_min" in df.columns:
+        med_dur = df.groupby(gb_cols)["duration_min"].median().reset_index(name="med_duration_min")
+        g = g.merge(med_dur, on=gb_cols, how="left")
+
+    # Drop self-loops (cast to str to be safe)
+    if drop_self_loops and not g.empty:
+        s = g["start_station_name"].astype(str)
+        e = g["end_station_name"].astype(str)
+        g = g[s != e]
+
+    # Threshold
+    g = g[g["rides"] >= int(min_rides)]
+    if g.empty:
+        return g
+
+    # Top-k selection
+    if per_origin:
+        by = ["start_station_name"]
+        if "member_type_display" in g.columns and member_split:
+            by.append("member_type_display")
+        g = (g.sort_values("rides", ascending=False)
+               .groupby(by, as_index=False)
+               .head(int(topk)))
+    else:
+        g = g.sort_values("rides", ascending=False).head(int(topk))
+
+    return g.reset_index(drop=True)
+
 @st.cache_data(show_spinner=False)
-def _cached_edges(df,
+def _cached_edges(df: pd.DataFrame,
                   per_origin: bool,
                   topk: int,
                   min_rides: int,
-                  drop_loops: bool,
+                  drop_self_loops: bool,
                   member_split: bool) -> pd.DataFrame:
-    """Cached safe wrapper that ALWAYS returns a DataFrame."""
     try:
-        g = _build_od_edges(
-            df=df,
-            per_origin=per_origin,
-            topk=int(topk),
-            min_rides=int(min_rides),
-            drop_self_loops=bool(drop_loops),
-            member_split=bool(member_split),
-        )
+        return _build_od_edges(df, per_origin, topk, min_rides, drop_self_loops, member_split)
     except Exception as e:
-        # Surface the failure but don't break the UI
         st.warning(f"Edge build failed: {e}")
-        g = None
-    # Coerce to DataFrame no matter what
-    if g is None:
         return pd.DataFrame(columns=["start_station_name","end_station_name","rides"])
-    if not isinstance(g, pd.DataFrame):
-        return pd.DataFrame(g)
-    # Ensure expected columns exist (avoids downstream attribute errors)
-    for c in ["start_station_name","end_station_name","rides"]:
-        if c not in g.columns:
-            g[c] = pd.Series(dtype="object" if c.endswith("_name") else "float")
-    return g
 
     # Count rides robustly (works even if ride_id missing)
     g = df.groupby(gb_cols).size().rename("rides").reset_index()
@@ -1238,21 +1257,6 @@ elif page == "OD Flows — Sankey + Map":
     if not need.issubset(df_f.columns):
         st.info("Need start/end station names.")
         st.stop()
-
-    # Small cache wrapper (safe if already defined elsewhere)
-    try:
-        _cached_edges
-    except NameError:
-        @st.cache_data(show_spinner=False)
-        def _cached_edges(df, per_origin, topk, min_rides, drop_self_loops, member_split):
-            return _build_od_edges(
-                df=df,
-                per_origin=per_origin,
-                topk=int(topk),
-                min_rides=int(min_rides),
-                drop_self_loops=drop_self_loops,
-                member_split=member_split,
-            )
 
     # ── Controls
     c1, c2, c3, c4 = st.columns(4)
