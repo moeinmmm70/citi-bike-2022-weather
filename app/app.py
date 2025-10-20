@@ -2502,7 +2502,7 @@ elif (
         geo = leaderboard.join(coords, on="station", how="left").dropna(subset=["lat", "lon"]).copy()
 
         if len(geo):
-            scale = st.slider("Bubble scale", 8, 40, 16)
+            scale = st.slider("Bubble scale", 1, 12, 5)
             # radius: 60m base + sqrt(rides) scaling (safe for zeros)
             vmax = float(geo["rides"].max())
             geo["radius"] = (60 + scale * (np.sqrt(geo["rides"]) / np.sqrt(vmax if vmax > 0 else 1)) * 100).astype(float)
