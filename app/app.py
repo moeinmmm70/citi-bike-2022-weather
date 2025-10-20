@@ -1854,6 +1854,7 @@ elif page == "Member vs Casual Profiles":
                 fig_b.update_xaxes(tickangle=45)
                 with col:
                     st.plotly_chart(fig_b, use_container_width=True)
+                    
 elif page == "OD Flows — Sankey + Map":
     st.header("🔀 Origin → Destination — Sankey + Map")
 
@@ -2020,15 +2021,20 @@ elif page == "OD Flows — Sankey + Map":
             scale = st.slider("Arc width scale", 1, 30, 10)
             geo["width"] = (scale * (np.sqrt(geo["rides"]) / np.sqrt(vmax if vmax > 0 else 1))).clip(0.5, 14)
 
+            # ✅ Fixed: build per-row RGBA lists without using fillna(list)
             if member_split and "member_type_display" in geo.columns:
-                geo["color"] = (
-                    geo["member_type_display"]
-                    .astype(str)
-                    .map({"Member 🧑‍💼": [34, 197, 94, 200], "Casual 🚲": [37, 99, 235, 200]})
-                    .fillna([160, 160, 160, 200])
-                )
+                _cmap = {
+                    "Member 🧑‍💼": [34, 197, 94, 200],
+                    "Casual 🚲":   [37, 99, 235, 200],
+                }
+                def _mk_color(v):
+                    if pd.isna(v):
+                        return [160, 160, 160, 200]
+                    return _cmap.get(str(v), [160, 160, 160, 200])
+                geo["color"] = geo["member_type_display"].apply(_mk_color).astype(object)
             else:
                 geo["color"] = [[37, 99, 235, 200]] * len(geo)
+                geo["color"] = geo["color"].astype(object)
 
             geo["start_s"] = ascii_safe(geo["start_station_name"])
             geo["end_s"] = ascii_safe(geo["end_station_name"])
