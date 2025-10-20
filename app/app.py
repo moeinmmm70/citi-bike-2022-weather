@@ -2721,7 +2721,8 @@ elif (
         import pydeck as pdk
 
         vmax = float(np.abs(geo["imbalance"]).max())
-        scale = st.slider("Map bubble scale", 10, 60, 18)
+        suffix_key = "".join(ch for ch in str(suffix) if ch.isalnum()).lower() or "all"
+        scale = st.slider("Map bubble scale", 1, 15, 5, key=f"imb_map_scale_{suffix_key}")
         geo["radius"] = (60 + scale * (np.sqrt(np.abs(geo["imbalance"])) / np.sqrt(vmax if vmax > 0 else 1)) * 120).astype(float)
         geo["color"] = [[34, 197, 94, 210] if v >= 0 else [220, 38, 38, 210] for v in geo["imbalance"].to_numpy()]
 
