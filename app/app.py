@@ -700,51 +700,53 @@ elif page == "Station Imbalance (In vs Out)":
 
             st.subheader("Map — stations sized by net IN/OUT")
 
-            # approximate station coords from start coords (median per station)
+            # approximate station coords from starts
             coords = (df_f.groupby("start_station_name")[["start_lat","start_lng"]]
                           .median().rename(columns={"start_lat":"lat","start_lng":"lon"}))
 
             m = biggest.join(coords, on="station", how="left").dropna(subset=["lat","lon"]).copy()
 
-            # color: green (IN) / red (OUT)
-            m["color"] = np.where(m["imbalance"] >= 0,
-                                   [34, 197, 94, 200],   # green-ish RGBA
-                                   [220, 38, 38, 200])   # red-ish RGBA
-
-            # radius scale: keep readable across datasets
-            # use a gentle scaling: base 60 m + 35 * sqrt(|Δ|)
-            m["radius"] = 60 + 35 * np.sqrt(np.abs(m["imbalance"]).clip(lower=1))
-
-            tooltip = {
-                "html": "<b>{station}</b><br>IN: {in}<br>OUT: {out}<br>&Delta;: {imbalance}",
-                "style": {"backgroundColor": "rgba(17,17,17,0.85)", "color": "white"}
-            }
-
-            # center on data (fallback to Manhattan)
-            if len(m):
-                center_lat, center_lon = float(m["lat"].median()), float(m["lon"].median())
+            if m.empty:
+                st.info("No stations to display for the current filters.")
             else:
-                center_lat, center_lon = 40.73, -73.98
+                # color: green (IN) / red (OUT) — build a list per row (no broadcasting issues)
+                m["color"] = m["imbalance"].ge(0).map({
+                    True:  [34, 197, 94, 200],   # green-ish
+                    False: [220, 38, 38, 200],   # red-ish
+                }).astype(object)  # keep as list objects for pydeck
 
-            view_state = pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=11, pitch=0, bearing=0)
+                # radius scale: 60 m base + 35 * sqrt(|Δ|); tweak scale if needed
+                scale = st.slider("Map bubble scale", 10, 100, 35)
+                m["radius"] = (60 + scale * np.sqrt(m["imbalance"].abs().clip(lower=1))).astype(float)
+                tooltip = {
+                    "html": "<b>{station}</b><br>IN: {in}<br>OUT: {out}<br>&Delta;: {imbalance}",
+                    "style": {"backgroundColor": "rgba(17,17,17,0.85)", "color": "white"}
+                }
 
-            layer = pdk.Layer(
-                "ScatterplotLayer",
-                data=m,
-                get_position="[lon, lat]",
-                get_radius="radius",
-                get_fill_color="color",
-                pickable=True,
-                auto_highlight=True
-            )
+                # center on data (fallback to Manhattan)
+                center_lat = float(m["lat"].median())
+                center_lon = float(m["lon"].median())
+                view_state = pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=11, pitch=0, bearing=0)
 
-            deck = pdk.Deck(layers=[layer],
-                            initial_view_state=view_state,
-                            map_style="mapbox://styles/mapbox/dark-v11",
-                            tooltip=tooltip)
+                layer = pdk.Layer(
+                    "ScatterplotLayer",
+                    data=m.reset_index(drop=True),
+                    get_position="[lon, lat]",
+                    get_radius="radius",
+                    get_fill_color="color",
+                    pickable=True,
+                    auto_highlight=True,
+                )
 
-            st.pydeck_chart(deck)
-            st.caption("Tip: combine with the **Hour of day** and **Weekday(s)** filters in the sidebar to compare AM vs PM redistribution.")
+                deck = pdk.Deck(
+                    layers=[layer],
+                    initial_view_state=view_state,
+                    map_style="mapbox://styles/mapbox/dark-v11",
+                    tooltip=tooltip,
+                )
+
+                st.pydeck_chart(deck)
+                st.caption("Tip: combine with the **Hour of day** and **Weekday(s)** filters in the sidebar to compare AM vs PM redistribution.")
 
 elif page == "Pareto: Share of Rides":
     st.header("📈 Pareto curve — demand concentration")
