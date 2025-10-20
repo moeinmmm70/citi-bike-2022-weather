@@ -186,49 +186,49 @@ def _build_od_edges(df: pd.DataFrame,
     if member_split and "member_type_display" in df.columns:
         gb_cols.append("member_type_display")
 
-    agg = {
-        "ride_id": "size" if "ride_id" in df.columns else "size",
-    }
-    if "distance_km" in df.columns:   agg["distance_km"]  = "median"
-    if "duration_min" in df.columns:  agg["duration_min"] = "median"
+    # Count rides robustly (works even if ride_id missing)
+    g = df.groupby(gb_cols).size().rename("rides").reset_index()
 
-    g = (df.groupby(gb_cols).agg(agg).rename(columns={"ride_id":"rides"}).reset_index())
+    # Optional: add medians if available
+    if "distance_km" in df.columns:
+        med_dist = df.groupby(gb_cols)["distance_km"].median().reset_index(name="med_distance_km")
+        g = g.merge(med_dist, on=gb_cols, how="left")
+    if "duration_min" in df.columns:
+        med_dur = df.groupby(gb_cols)["duration_min"].median().reset_index(name="med_duration_min")
+        g = g.merge(med_dur, on=gb_cols, how="left")
 
+    # Drop self-loops safely (cast to string to avoid categorical-compare error)
     if drop_self_loops:
-        g = g[g["start_station_name"] != g["end_station_name"]]
+        s = g["start_station_name"].astype(str)
+        e = g["end_station_name"].astype(str)
+        g = g[s != e]
 
-    # Apply min threshold early
+    # Threshold early
     g = g[g["rides"] >= int(min_rides)]
 
+    # Top-k selection
     if per_origin:
-        # Take top-k per origin (and per member type if split)
-        by = ["start_station_name"] + (["member_type_display"] if (member_split and "member_type_display" in g.columns) else [])
+        by = ["start_station_name"]
+        if member_split and "member_type_display" in g.columns:
+            by.append("member_type_display")
         g = (g.sort_values("rides", ascending=False)
                .groupby(by, as_index=False)
                .head(topk))
     else:
         g = g.sort_values("rides", ascending=False).head(topk)
 
-    # Nice columns
-    if "distance_km" in g.columns:
-        g.rename(columns={"distance_km":"med_distance_km"}, inplace=True)
-    if "duration_min" in g.columns:
-        g.rename(columns={"duration_min":"med_duration_min"}, inplace=True)
-
     return g
 
 def _matrix_from_edges(edges: pd.DataFrame, member_split: bool) -> pd.DataFrame:
     if edges.empty: return pd.DataFrame()
-    # If member-split, aggregate both groups to one matrix (you can add a toggle to choose single group)
     base = edges.copy()
     if member_split and "member_type_display" in base.columns:
         base = base.groupby(["start_station_name","end_station_name"], as_index=False)["rides"].sum()
-    mat = (base.pivot(index="start_station_name", columns="end_station_name", values="rides")
-                 .fillna(0))
-    # Order rows/cols by totals for readability
-    row_order = mat.sum(axis=1).sort_values(ascending=False).index
-    col_order = mat.sum(axis=0).sort_values(ascending=False).index
-    return mat.loc[row_order, col_order]
+    mat = (base.pivot(index="start_station_name", columns="end_station_name", values="rides").fillna(0))
+    # order for readability
+    mat = mat.loc[mat.sum(axis=1).sort_values(ascending=False).index,
+                  mat.sum(axis=0).sort_values(ascending=False).index]
+    return mat
 
 # UI helpers (Intro hero + KPI cards)
 def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
@@ -1334,7 +1334,8 @@ elif page == "OD Flows (Sankey) & Matrix":
             if len(geo):
                 # Width scale
                 w_scale = st.slider("Arc width scale", 1, 30, 10)
-                geo["width"] = (w_scale * (np.sqrt(geo[value_col]) / np.sqrt(geo[value_col].max()))).clip(lower=0.5)
+                maxv = float(edges[value_col].max())
+                geo["width"] = (w_scale * (np.sqrt(edges[value_col]) / np.sqrt(maxv if maxv > 0 else 1.0))).clip(lower=0.5)
                 # Color by direction (blue) or member split if available
                 if member_split and "member_type_display" in geo.columns:
                     geo["color"] = geo["member_type_display"].map({
