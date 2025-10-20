@@ -2031,14 +2031,13 @@ elif page == "OD Flows — Sankey + Map":
                     if pd.isna(v):
                         return [160, 160, 160, 200]
                     return _cmap.get(str(v), [160, 160, 160, 200])
-                geo["color"] = geo["member_type_display"].apply(_mk_color).astype(object)
-            else:
-                geo["color"] = [[37, 99, 235, 200]] * len(geo)
-                geo["color"] = geo["color"].astype(object)
 
-            geo["start_s"] = ascii_safe(geo["start_station_name"])
-            geo["end_s"] = ascii_safe(geo["end_station_name"])
-
+                    # Use NumPy values to avoid pandas' categorical mapping path
+                    _vals = geo["member_type_display"].to_numpy()
+                    geo["color"] = [_mk_color(v) for v in _vals]
+                else:
+                    geo["color"] = [[37, 99, 235, 200]] * len(geo)
+            
             layer = pdk.Layer(
                 "ArcLayer",
                 data=geo,
