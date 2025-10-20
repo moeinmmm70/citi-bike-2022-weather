@@ -589,10 +589,10 @@ elif page == "Trip Flows Map":
     st.header("🗺️ Trip flows (Kepler.gl)")
     st.caption(
         "Note: The embedded Kepler.gl map is a static HTML export. "
-        "The **presets and widgets below** (OD flows & imbalance) react to filters; the iframe does not."
+        "The **presets and widgets below** react to filters; the iframe itself does not."
     )
 
-    # ---------------- Preset selector ----------------
+    # ---------- Preset selector ----------
     preset = st.selectbox(
         "Analysis preset (applies to the widgets below)",
         [
@@ -605,7 +605,6 @@ elif page == "Trip Flows Map":
         index=0,
     )
 
-    # Context bullets (define BEFORE use)
     bullets = {
         "AM commute (Weekdays 07–10) • fair weather":
             "- **Inbound flows** to CBD/transit hubs\n- **Source→Sink pairs** for AM rebalancing\n- Stage trucks on corridors",
@@ -616,10 +615,10 @@ elif page == "Trip Flows Map":
         "Rainy & cold days (all hours)":
             "- **Demand drop** vs resilient OD pairs\n- Scale staffing down; watch hotspots",
         "No extra preset (use sidebar filters only)":
-            "- Use sidebar filters to define a scenario; OD & imbalance update live",
+            "- Use sidebar filters to define a scenario; widgets update live",
     }
 
-    # ---------------- Column availability ----------------
+    # ---------- Column availability ----------
     has_started_at = "started_at" in df_f.columns
     has_date = "date" in df_f.columns
     tempcol = next((c for c in ["avg_temp_c","avgTemp","avg_temp","temperature_c"] if c in df_f.columns), None)
@@ -632,19 +631,14 @@ elif page == "Trip Flows Map":
             m &= df[tempcol].between(12, 26)
         if precip_bin_col is not None:
             m &= df[precip_bin_col].astype(str) != "High"
-        elif precip_raw is not None:
-            if df[precip_raw].notna().sum() > 10:
-                q66 = float(df[precip_raw].quantile(0.66))
-            else:
-                q66 = 2.0
-            m &= (df[precip_raw] <= q66)
+        elif precip_raw is not None and df[precip_raw].notna().sum() > 10:
+            m &= (df[precip_raw] <= float(df[precip_raw].quantile(0.66)))
         return m
 
     def apply_preset_local(dfin: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
         info: list[str] = []
         if dfin.empty:
             return dfin, ["No data after global (sidebar) filters."]
-
         dfx = dfin.copy()
 
         if has_started_at:
@@ -683,21 +677,13 @@ elif page == "Trip Flows Map":
             if has_started_at: m &= dfx["_hour"].between(10, 18, inclusive="both")
             else: info.append("Hour window (10–18) skipped.")
             if tempcol is not None: m &= dfx[tempcol].between(18, 28)
-            else: info.append("Temperature filter skipped (no temperature).")
             if precip_bin_col is not None: m &= dfx[precip_bin_col].astype(str) == "Low"
-            elif precip_raw is not None:
-                q33 = float(dfx[precip_raw].quantile(0.33)) if dfx[precip_raw].notna().sum() > 10 else 0.2
-                m &= dfx[precip_raw] <= q33
-            else: info.append("Precipitation filter skipped (no precipitation).")
 
         elif preset.startswith("Rainy & cold"):
             if tempcol is not None: m &= dfx[tempcol] < 8
-            else: info.append("Cold filter skipped (no temperature).")
             if precip_bin_col is not None: m &= dfx[precip_bin_col].astype(str) == "High"
-            elif precip_raw is not None:
-                q66 = float(dfx[precip_raw].quantile(0.66)) if dfx[precip_raw].notna().sum() > 10 else 2.0
-                m &= dfx[precip_raw] >= q66
-            else: info.append("Rainy filter skipped (no precipitation).")
+            elif precip_raw is not None and dfx[precip_raw].notna().sum() > 10:
+                m &= dfx[precip_raw] >= float(dfx[precip_raw].quantile(0.66))
 
         out = dfx[m] if m.any() else dfx.iloc[0:0].copy()
         if out.empty:
@@ -708,7 +694,7 @@ elif page == "Trip Flows Map":
     if preset_notes:
         st.info("Preset notes:\n- " + "\n- ".join(preset_notes))
 
-    # ---------------- Kepler (static iframe) ----------------
+    # ---------- Kepler iframe ----------
     path_to_html = None
     for p in MAP_HTMLS:
         if p.exists():
@@ -727,18 +713,83 @@ elif page == "Trip Flows Map":
         except Exception as e:
             st.error(f"Failed to load map HTML: {e}")
 
-    # ---------------- Context + Divider ----------------
+    # ---------- Context ----------
     st.markdown("### 🎯 What to look for")
     st.markdown(bullets.get(preset, ""))
     st.markdown("---")
 
-    # ---------------- OD Flows & Imbalance (single clean output) ----------------
-    needed = {"start_station_name", "end_station_name"}
-    if not needed.issubset(dflow.columns):
-        st.info("Need `start_station_name` and `end_station_name` columns to build OD flows and compute imbalance.")
-        st.stop()
+    # ---------- Branch: do we have end_station_name? ----------
+    have_od = {"start_station_name", "end_station_name"}.issubset(dflow.columns)
 
-    # --- Top OD pairs (Sankey)
+    if not have_od:
+        # One concise notice (no st.stop, no duplication)
+        st.warning(
+            "This sample file lacks `end_station_name`. OD Sankey and station imbalance need both "
+            "`start_station_name` **and** `end_station_name`.\n\n"
+            "👉 **Workaround shown below:** Origin Hotspots & AM/PM origin load. "
+            "To unlock full OD analysis, regenerate the reduced CSV keeping at least:\n"
+            "`ride_id, started_at, start_station_name, end_station_name, date, avg_temp_c, member_type, season`"
+        )
+
+        # --- Origin Hotspots (Top start stations) ---
+        st.subheader("🚉 Origin hotspots — top start stations")
+        if "start_station_name" not in dflow.columns or dflow.empty:
+            st.info("No start station data after filters.")
+        else:
+            topN = st.slider("Show top N stations", 10, 50, 20, 5, key="orig_topN")
+            starts = (
+                dflow.assign(n=1)
+                .groupby("start_station_name")["n"].sum()
+                .sort_values(ascending=False)
+                .head(topN)
+                .reset_index()
+            )
+            starts["label"] = starts["start_station_name"].astype(str).map(lambda s: shorten_name(s, 28))
+
+            fig_o = go.Figure(go.Bar(
+                x=starts["label"], y=starts["n"], text=starts["n"], textposition="outside",
+                hovertext=starts["start_station_name"],
+                hovertemplate="<b>%{hovertext}</b><br>Rides: %{y:,}<extra></extra>"
+            ))
+            fig_o.update_layout(height=560, title=f"Top {topN} origins — {preset}",
+                                margin=dict(l=20, r=20, t=60, b=100))
+            fig_o.update_xaxes(title="Station", tickangle=45, tickfont=dict(size=10))
+            fig_o.update_yaxes(title="Rides (count)")
+            st.plotly_chart(fig_o, use_container_width=True)
+
+            st.download_button(
+                "⬇️ Download origins (CSV)",
+                starts.rename(columns={"start_station_name":"station", "n":"rides"}).to_csv(index=False).encode("utf-8"),
+                "origin_hotspots.csv", "text/csv"
+            )
+
+        # --- AM vs PM origin load (weekdays) ---
+        if has_started_at and not dflow.empty:
+            st.subheader("⏰ AM vs PM origin load (weekdays)")
+            dtx = pd.to_datetime(dflow["started_at"], errors="coerce")
+            weekdays = dtx.dt.weekday <= 4
+            hours = dtx.dt.hour
+            bands = pd.cut(
+                hours,
+                bins=[0,7,10,16,19,24],
+                labels=["pre-AM","AM(7-10)","midday","PM(16-19)","late"],
+                right=False
+            )
+            tbl = dflow.loc[weekdays].assign(band=bands).groupby("band").size().reindex(
+                ["pre-AM","AM(7-10)","midday","PM(16-19)","late"]
+            ).fillna(0).rename("rides").reset_index()
+
+            fig_b = go.Figure(go.Bar(x=tbl["band"], y=tbl["rides"], text=tbl["rides"], textposition="outside"))
+            fig_b.update_layout(height=420, title="Weekday origin load by time band")
+            fig_b.update_yaxes(title="Rides (count)")
+            st.plotly_chart(fig_b, use_container_width=True)
+
+        st.caption("Once you include `end_station_name`, this page will show OD Sankey and Source/Sink imbalance automatically.")
+        return  # end branch
+
+    # ---------- Full OD widgets (runs only when end_station_name exists) ----------
+
+    # Top OD pairs (Sankey)
     st.subheader("Top origin → destination flows (Sankey)")
     topN = st.slider("Show top N OD pairs", 10, 50, 20, 5, key="od_topN")
     flows = (
@@ -748,7 +799,6 @@ elif page == "Trip Flows Map":
         .sort_values("count", ascending=False)
         .head(topN)
     )
-
     if flows.empty:
         st.info("No trips after filters/preset.")
     else:
@@ -770,7 +820,7 @@ elif page == "Trip Flows Map":
             "top_od_pairs.csv", "text/csv",
         )
 
-    # --- Station imbalance (sources vs sinks)
+    # Station imbalance
     st.markdown("### ⚖️ Station imbalance — sources vs sinks")
     start_counts = dflow.groupby("start_station_name").size().rename("departures")
     end_counts   = dflow.groupby("end_station_name").size().rename("arrivals")
@@ -812,10 +862,8 @@ elif page == "Trip Flows Map":
         "station_imbalance.csv", "text/csv",
     )
 
-    st.caption(
-        f"ℹ️ Preset “{preset}” shapes both OD and imbalance widgets. "
-        f"Kepler map is static — rebuild or use pydeck for dynamic filtering."
-    )
+    st.caption(f"ℹ️ Preset “{preset}” shapes both OD and imbalance widgets. "
+               f"Kepler map is static — rebuild or use pydeck for dynamic filtering.")
 
 elif page == "Weekday × Hour Heatmap":
     st.header("⏰ Temporal load — weekday × start hour")
