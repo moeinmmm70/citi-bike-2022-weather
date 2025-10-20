@@ -704,45 +704,95 @@ df_f = _backfill_trip_weather(df_f, daily_all)
 # ────────────────────────────── Pages ──────────────────────────────────────
 if page == "Intro":
     render_hero_panel()
+
+    # Active selection summary (shows what the KPIs reflect)
     st.caption(
         f"**Selection:** {date_range[0]} → {date_range[1]} · "
         f"{'All seasons' if seasons is None or set(seasons)==set(['Winter','Spring','Summer','Autumn']) else ', '.join(seasons)} · "
         f"{'All users' if (usertype in (None,'All')) else usertype.title()} · "
         f"{'All day' if hour_range is None else f'{hour_range[0]:02d}:00–{hour_range[1]:02d}:00'}"
     )
+
     show_cover(cover_path)
     st.caption("⚙️ Powered by NYC Citi Bike data • 365 days • Interactive visuals")
 
-    KPIs = compute_core_kpis(df_f, daily_f)
+    # --- Core KPIs (robust to missing cols) ---
+    KPIs = compute_core_kpis(df_f, daily_f)  # returns total_rides, avg_day, corr_tr
 
-    # Simple weather uplift
+    # Weather uplift: comfy vs extreme bands (defensive)
     weather_uplift_pct = None
     if daily_f is not None and not daily_f.empty and "avg_temp_c" in daily_f.columns:
-        comfy = daily_f.loc[(daily_f["avg_temp_c"] >= 15) & (daily_f["avg_temp_c"] <= 25), "bike_rides_daily"].mean()
-        extreme = daily_f.loc[(daily_f["avg_temp_c"] < 5) | (daily_f["avg_temp_c"] > 30), "bike_rides_daily"].mean()
-        if pd.notnull(comfy) and pd.notnull(extreme) and extreme not in (0, np.nan):
-            weather_uplift_pct = (comfy - extreme) / extreme * 100.0
+        d_nonnull = daily_f.dropna(subset=["avg_temp_c", "bike_rides_daily"]).copy()
+        if not d_nonnull.empty:
+            comfy   = d_nonnull.loc[d_nonnull["avg_temp_c"].between(15, 25, inclusive="both"), "bike_rides_daily"].mean()
+            extreme = d_nonnull.loc[~d_nonnull["avg_temp_c"].between(5, 30, inclusive="both"), "bike_rides_daily"].mean()
+            if pd.notnull(comfy) and pd.notnull(extreme) and extreme not in (0, np.nan):
+                weather_uplift_pct = (comfy - extreme) / extreme * 100.0
     weather_str = f"{weather_uplift_pct:+.0f}%" if weather_uplift_pct is not None else "—"
 
-    # Peak Season text
+    # Coverage: % of selected days with usable weather (so weather KPIs are defensible)
+    coverage = "—"
+    if daily_f is not None and not daily_f.empty:
+        if "avg_temp_c" in daily_f.columns:
+            cov = 100.0 * daily_f["avg_temp_c"].notna().mean()
+            coverage = f"{cov:.0f}%"
+        else:
+            coverage = "0%"
+
+    # Peak Season (only if season exists and we can compute a sensible average)
     peak_value, peak_sub = "—", ""
     if "season" in df_f.columns and daily_f is not None and not daily_f.empty:
         tmp = daily_f.copy()
         if "season" not in tmp.columns:
-            s_map = df_f.groupby("date")["season"].agg(lambda s: s.mode().iloc[0] if len(s.mode()) else np.nan).reset_index()
+            s_map = (
+                df_f.groupby("date")["season"]
+                    .agg(lambda s: s.mode().iloc[0] if len(s.mode()) else np.nan)
+                    .reset_index()
+            )
             tmp = tmp.merge(s_map, on="date", how="left")
-        m = tmp.groupby("season")["bike_rides_daily"].mean().sort_values(ascending=False)
-        if len(m):
-            peak_value = f"{m.index[0]}"
-            peak_sub   = f"{kfmt(m.iloc[0])} avg trips"
+        if "season" in tmp.columns and "bike_rides_daily" in tmp.columns:
+            m = tmp.groupby("season")["bike_rides_daily"].mean().sort_values(ascending=False)
+            if len(m):
+                peak_value = f"{m.index[0]}"
+                peak_sub   = f"{kfmt(m.iloc[0])} avg trips"
 
+    # --- KPI cards (clean, defensible set) ---
     cA, cB, cC, cD, cE = st.columns(5)
-    with cA: kpi_card("Total Trips", kfmt(KPIs["total_rides"]), "Across all stations", "🧮")
-    with cB: kpi_card("Daily Average", kfmt(KPIs["avg_day"]) if KPIs["avg_day"] is not None else "—", "Trips per day", "📅")
-    with cC: kpi_card("Temp Impact", f"{KPIs['corr_tr']:+.3f}" if KPIs["corr_tr"] is not None else "—", "Correlation coeff.", "🌡️")
-    with cD: kpi_card("Weather Uplift", weather_str, "Comfy (15–25°C) vs extreme", "🌦️")
-    with cE: kpi_card("Peak Season", peak_value, peak_sub, "🏆")
+    with cA:
+        kpi_card(
+            "Total Trips",
+            kfmt(KPIs.get("total_rides", 0)),
+            "Across all stations",
+            "🧮"
+        )
+    with cB:
+        kpi_card(
+            "Daily Average",
+            kfmt(KPIs["avg_day"]) if KPIs.get("avg_day") is not None else "—",
+            "Trips per day (selection)",
+            "📅"
+        )
+    with cC:
+        kpi_card(
+            "Temp ↔ Rides (r)",
+            f"{KPIs['corr_tr']:+.3f}" if KPIs.get("corr_tr") is not None else "—",
+            "Pearson on daily agg",
+            "🌡️"
+        )
+    with cD:
+        kpi_card(
+            "Weather Uplift",
+            weather_str,
+            "15–25°C vs extreme (<5 or >30°C)",
+            "🌦️"
+        )
+    with cE:
+        # If you prefer “Coverage” instead of “Peak Season”, swap the two lines below
+        kpi_card("Coverage", coverage, "Weather data availability", "🧩")
+        # Or show Peak Season (comment the line above and uncomment below):
+        # kpi_card("Peak Season", peak_value, peak_sub, "🏆")
 
+    # --- Orientation cards ---
     st.markdown("### What you’ll find here")
     c1, c2, c3, c4 = st.columns(4)
     c1.info("**Advanced KPIs**\n\nTotals, Avg/day, Temp↔Rides correlation.")
