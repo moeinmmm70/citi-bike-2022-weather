@@ -604,7 +604,7 @@ elif page == "Trip Flows Map":
     ROOT = Path(repo_root) if "repo_root" in globals() else Path.cwd()
     preset_dirs = [
         ROOT / "map",                               # your repo path with JSONs
-        ROOT / "data" / "reports" / "map",
+        ROOT / "reports" / "map",
         ROOT / "data" / "reports" / "map" / "presets",
     ]
     preset_files = []
