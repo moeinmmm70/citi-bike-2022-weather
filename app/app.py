@@ -1393,7 +1393,7 @@ elif page == "OD Flows — Sankey + Map":
         st.info("Trip coordinates not available for map.")
 
 # ───────────────────────── OD Matrix — Top Origins × Destinations ─────────────────────────
-elif page == "OD Matrix — Top Origins × Destinations":
+elif page == "OD Matrix — Top Origins × Dest":
     st.header("📊 OD Matrix — Top origins × destinations")
 
     need = {"start_station_name", "end_station_name"}
