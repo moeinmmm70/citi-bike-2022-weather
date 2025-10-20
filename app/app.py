@@ -1228,7 +1228,7 @@ elif page == "Weather vs Bike Usage":
                     st.write(coefs.sort_values(key=np.abs, ascending=False).head(10).round(3))
 
 elif page == "Trip Metrics (Duration • Distance • Speed)":
-    st.header("🚴 Trip metrics (robust view)")
+    st.header("🚴 Trip metrics")
 
     need = {"duration_min","distance_km","speed_kmh"}
     if not need.issubset(df_f.columns):
@@ -1581,8 +1581,6 @@ elif page == "Trip Metrics (Duration • Distance • Speed)":
                 high_dur = df_f.loc[m_dur & (df_f["precip_bin"]=="High"), "duration_min"].mean()
                 if pd.notnull(low_dur) and pd.notnull(high_dur) and low_dur>0:
                     st.metric("Duration: High rain vs Low", f"{(high_dur-low_dur)/low_dur*100:+.1f}%")
-
-        st.caption("Robust view clips only for plotting. All rows remain available for other pages/exports.")
 
 elif page == "Member vs Casual Profiles":
     st.header("👥 Member vs Casual riding patterns")
