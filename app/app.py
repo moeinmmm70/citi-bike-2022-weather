@@ -1166,37 +1166,237 @@ elif page == "OD Flows (Sankey) & Matrix":
 
 elif page == "Station Popularity":
     st.header("🚉 Most popular start stations")
+
     if "start_station_name" not in df_f.columns:
         st.warning("`start_station_name` not found in sample.")
     else:
-        topN = st.slider("Top N stations", 10, 100, 20, 5)
-        s = (df_f.assign(n=1)
-                  .groupby("start_station_name")["n"].sum()
-                  .sort_values(ascending=False)
-                  .head(topN)
-                  .reset_index())
-        s["label"] = s["start_station_name"].astype(str).map(lambda z: shorten_name(z, 28))
+        # ── Controls
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            topN = st.slider("Top N stations", 5, 100, 20, 5)
+        with c2:
+            metric = st.selectbox("Metric", ["Rides", "Share %"], help="Share is within current filters.")
+        with c3:
+            group_by = st.selectbox("Group by", ["Overall", "By Month", "By Hour"])
 
-        fig = go.Figure(go.Bar(
-            x=s["label"], y=s["n"], text=s["n"], textposition="outside",
-            hovertext=s["start_station_name"],
-            hovertemplate="<b>%{hovertext}</b><br>Rides: %{y:,}<extra></extra>"
-        ))
-        fig.update_layout(
-            height=600,
-            title=f"Top {topN} start stations — rides",
-            xaxis_title="Station",
-            yaxis_title="Rides (count)",
-            margin=dict(l=20, r=20, t=60, b=100)
-        )
-        fig.update_xaxes(tickangle=45, tickfont=dict(size=10))
-        st.plotly_chart(fig, use_container_width=True)
+        c4, c5 = st.columns(2)
+        with c4:
+            stack_by_member = st.checkbox("Stack by Member Type", value=("member_type_display" in df_f.columns))
+        with c5:
+            wx_split = st.selectbox(
+                "Weather split",
+                ["None", "Wet vs Dry", "Temp bands (Cold/Mild/Hot)"],
+                index=0 if "wet_day" not in df_f.columns and "avg_temp_c" not in df_f.columns else 1
+            )
 
+        st.markdown("---")
+
+        # ── Prep base aggregations
+        base = df_f.copy()
+        base["station"] = base["start_station_name"].astype(str)
+
+        # Weather split columns (optional)
+        wx_col = None
+        if wx_split == "Wet vs Dry" and "wet_day" in base.columns:
+            wx_col = "wet_day_label"
+            base[wx_col] = base["wet_day"].map({0: "Dry", 1: "Wet"})
+        elif wx_split.startswith("Temp") and "avg_temp_c" in base.columns:
+            wx_col = "temp_band"
+            base[wx_col] = pd.cut(
+                base["avg_temp_c"],
+                bins=[-100, 5, 20, 200],
+                labels=["Cold <5°C", "Mild 5–20°C", "Hot >20°C"],
+                include_lowest=True
+            )
+
+        # Member split (optional)
+        mcol = "member_type_display" if (stack_by_member and "member_type_display" in base.columns) else None
+
+        # Top stations by total rides in current filter
+        leaderboard = (base.groupby("station").size().rename("rides").sort_values(ascending=False).head(topN).reset_index())
+        keep = set(leaderboard["station"])
+        small = base[base["station"].isin(keep)].copy()
+
+        # Share calculation helper
+        def _maybe_to_share(df_grp, val_col="rides", by_cols=None):
+            if metric == "Share %":
+                if by_cols is None or not by_cols:
+                    total = df_grp[val_col].sum()
+                    df_grp[val_col] = np.where(total > 0, df_grp[val_col] / total * 100.0, 0.0)
+                else:
+                    # normalize within each group key (exclude station from the denominator)
+                    denom = df_grp.groupby(by_cols)[val_col].transform(lambda s: s.sum() if s.sum() > 0 else np.nan)
+                    df_grp[val_col] = (df_grp[val_col] / denom * 100.0).fillna(0.0)
+            return df_grp
+
+        # ───────────────────────── Overall (Bar) ─────────────────────────
+        if group_by == "Overall":
+            by = ["station"]
+            if wx_col: by.append(wx_col)
+            if mcol:   by.append(mcol)
+            g = (small.groupby(by).size().rename("value").reset_index())
+
+            # Share %
+            share_keys = []
+            if wx_col: share_keys.append(wx_col)
+            if mcol:   share_keys.append(mcol)
+            g = _maybe_to_share(g, val_col="value", by_cols=share_keys)
+
+            # Build label and chart
+            xlab = "Share (%)" if metric == "Share %" else "Rides (count)"
+            color = mcol if mcol else wx_col
+            fig = px.bar(
+                g, x="station", y="value", color=color, barmode=("stack" if color else "relative"),
+                labels={"station": "Station", "value": xlab, (color or ""): (MEMBER_LEGEND_TITLE if color == mcol else "Weather")},
+                hover_data={ "station": True, "value": ":,.2f" if metric=="Share %" else ":," }
+            )
+            fig.update_layout(
+                height=620,
+                title=f"Top {len(keep)} start stations — {xlab}",
+                xaxis_title="Station", yaxis_title=xlab,
+                margin=dict(l=20, r=20, t=60, b=100),
+                legend_title_text=(MEMBER_LEGEND_TITLE if color == mcol else ("Weather" if color else ""))
+            )
+            fig.update_xaxes(tickangle=45, tickfont=dict(size=10), categoryorder="array", categoryarray=leaderboard["station"].tolist())
+            st.plotly_chart(fig, use_container_width=True)
+
+        # ───────────────────────── By Month ─────────────────────────
+        elif group_by == "By Month":
+            if "month" not in small.columns:
+                st.info("Month column not available. Ensure `started_at` parsed in load_data.")
+            else:
+                by = ["month", "station"]
+                if wx_col: by.append(wx_col)
+                if mcol:   by.append(mcol)
+                g = (small.groupby(by).size().rename("value").reset_index())
+
+                # Share within each month (and weather/member group, if chosen)
+                share_keys = ["month"]
+                if wx_col: share_keys.append(wx_col)
+                if mcol:   share_keys.append(mcol)
+                g = _maybe_to_share(g, val_col="value", by_cols=share_keys)
+
+                # If too many stations for a line chart, fallback to heatmap
+                if len(keep) <= 10 and not wx_col and not mcol:
+                    fig = px.line(
+                        g, x="month", y="value", color="station", markers=True,
+                        labels={"value": "Share (%)" if metric=="Share %" else "Rides", "month":"Month", "station":"Station"}
+                    )
+                    fig.update_layout(height=560, title="Monthly trend for top stations")
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    mat = (g.pivot_table(index="station", columns="month", values="value", aggfunc="sum")
+                             .loc[leaderboard["station"]]  # keep top order
+                             .fillna(0))
+                    fig = px.imshow(
+                        mat, aspect="auto", origin="lower",
+                        labels=dict(color=("Share (%)" if metric=="Share %" else "Rides"))
+                    )
+                    fig.update_layout(height=600, title="Monthly pattern — station × month")
+                    st.plotly_chart(fig, use_container_width=True)
+
+        # ───────────────────────── By Hour ─────────────────────────
+        elif group_by == "By Hour":
+            if "hour" not in small.columns:
+                st.info("`hour` not available. Ensure `started_at` parsed in load_data.")
+            else:
+                by = ["hour", "station"]
+                if wx_col: by.append(wx_col)
+                if mcol:   by.append(mcol)
+                g = (small.groupby(by).size().rename("value").reset_index())
+
+                # Share within each hour (and weather/member group, if chosen)
+                share_keys = ["hour"]
+                if wx_col: share_keys.append(wx_col)
+                if mcol:   share_keys.append(mcol)
+                g = _maybe_to_share(g, val_col="value", by_cols=share_keys)
+
+                mat = (g.pivot_table(index="station", columns="hour", values="value", aggfunc="sum")
+                         .loc[leaderboard["station"]]
+                         .reindex(columns=range(0,24))
+                         .fillna(0))
+                fig = px.imshow(
+                    mat, aspect="auto", origin="lower",
+                    labels=dict(color=("Share (%)" if metric=="Share %" else "Rides"))
+                )
+                fig.update_xaxes(title_text="Hour of day")
+                fig.update_yaxes(title_text="Station")
+                fig.update_layout(height=600, title="Hourly pattern — station × hour")
+                st.plotly_chart(fig, use_container_width=True)
+
+        # ───────────────────────── Map of Top Stations ─────────────────────────
+        # Use start_lat/lng medians; scale radius by rides
+        if {"start_lat","start_lng"}.issubset(df_f.columns):
+            st.subheader("🗺️ Map — top stations sized by volume")
+            import pydeck as pdk
+
+            coords = (df_f.groupby("start_station_name")[["start_lat","start_lng"]]
+                          .median().rename(columns={"start_lat":"lat","start_lng":"lon"}))
+            geo = leaderboard.join(coords, on="station", how="left").dropna(subset=["lat","lon"]).copy()
+
+            if len(geo):
+                scale = st.slider("Bubble scale", 8, 40, 16)
+                geo["radius"] = (60 + scale * np.sqrt(geo["rides"].clip(lower=1))).astype(float)
+                geo["color"]  = [ [37,99,235,200] ] * len(geo)  # blue-ish
+
+                view_state = pdk.ViewState(latitude=float(geo["lat"].median()),
+                                           longitude=float(geo["lon"].median()),
+                                           zoom=11, pitch=0)
+                layer = pdk.Layer(
+                    "ScatterplotLayer",
+                    data=geo,
+                    get_position="[lon, lat]",
+                    get_radius="radius",
+                    get_fill_color="color",
+                    pickable=True
+                )
+                deck = pdk.Deck(layers=[layer], initial_view_state=view_state,
+                                map_style="mapbox://styles/mapbox/dark-v11",
+                                tooltip={"text":"{station}\nRides: {rides}"})
+                st.pydeck_chart(deck)
+            else:
+                st.info("No coordinates available for these stations.")
+
+        # ───────────────────────── Station deep-dive ─────────────────────────
+        st.subheader("🔎 Station deep-dive")
+        picked = st.selectbox("Pick a station", leaderboard["station"].tolist())
+        focus = df_f[df_f["start_station_name"].astype(str) == picked]
+        cA, cB, cC = st.columns(3)
+
+        # Hour profile
+        with cA:
+            if "hour" in focus.columns:
+                gh = focus.groupby("hour").size().rename("rides").reset_index()
+                figH = px.line(gh, x="hour", y="rides", markers=True,
+                               labels={"hour":"Hour of day","rides":"Rides"})
+                figH.update_layout(height=320, title="Hourly profile")
+                st.plotly_chart(figH, use_container_width=True)
+
+        # Weekday profile
+        with cB:
+            if "weekday" in focus.columns:
+                gw = focus.groupby("weekday").size().rename("rides").reset_index()
+                gw["weekday_name"] = gw["weekday"].map({0:"Mon",1:"Tue",2:"Wed",3:"Thu",4:"Fri",5:"Sat",6:"Sun"})
+                figW = px.bar(gw, x="weekday_name", y="rides",
+                              labels={"weekday_name":"Weekday","rides":"Rides"})
+                figW.update_layout(height=320, title="Weekday profile")
+                st.plotly_chart(figW, use_container_width=True)
+
+        # Wet vs Dry impact (if available)
+        with cC:
+            if "wet_day" in focus.columns and focus["wet_day"].notna().any():
+                gd = (focus.assign(day_type=lambda x: x["wet_day"].map({0:"Dry",1:"Wet"}))
+                             .groupby("day_type").size().rename("rides").reset_index())
+                figD = px.bar(gd, x="day_type", y="rides",
+                              labels={"day_type":"Day type","rides":"Rides"})
+                figD.update_layout(height=320, title="Wet vs Dry impact")
+                st.plotly_chart(figD, use_container_width=True)
+
+        # Download current leaderboard
         st.download_button(
-            "Download top stations (CSV)",
-            s[["start_station_name","n"]].rename(columns={"n":"rides"}).to_csv(index=False).encode("utf-8"),
-            "top_stations.csv",
-            "text/csv"
+            "Download leaderboard (CSV)",
+            leaderboard.rename(columns={"rides":"rides_total"}).to_csv(index=False).encode("utf-8"),
+            "top_stations_leaderboard.csv", "text/csv"
         )
 
 elif page == "Station Imbalance (In vs Out)":
