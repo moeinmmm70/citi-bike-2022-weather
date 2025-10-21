@@ -964,7 +964,7 @@ if not DATA_PATH.exists():
     st.stop()
 
 # Load
-df = load_data(DATA_PATH, DATA_PATH.stat().st_mtime)
+df = load_data(DATA_PATH, weather_path=Path("data/processed/nyc_weather_2022_daily_full.csv"))
 
 # ---------- Presets (top, to encourage use) ----------
 with st.sidebar.expander("⚡ Quick presets", expanded=False):
