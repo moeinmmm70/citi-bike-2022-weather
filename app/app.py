@@ -1269,14 +1269,14 @@ except Exception:
     HAS_STL = False
     
 st.sidebar.markdown("### ⏱ TS Controls")
-horizon = st.sidebar.slider("Forecast horizon (days)", 7, 60, 21, 1)
-show_last_n = st.sidebar.slider("Plot history window (days)", 60, 365, 180, 10)
+horizon = st.sidebar.slider("Forecast horizon (days)", 7, 60, 21, 1, key="ts_horizon")
+show_last_n = st.sidebar.slider("Plot history window (days)", 60, 365, 180, 10, key="ts_history")
 
 model_name = st.sidebar.selectbox(
     "Model",
-    ["Seasonal-Naive (t−7)", "Naive (t−1)", "7-day Moving Average",
-     "SARIMAX (weekly)", "De-weathered + Seasonal-Naive"],
-    index=0
+    ["Seasonal-Naive (t−7)", "Naive (t−1)", "7-day Moving Average", "SARIMAX (weekly)", "De-weathered + Seasonal-Naive"],
+    index=0,
+    key="ts_model"
 )
 
 if model_name == "SARIMAX (weekly)" and not HAS_SARIMAX:
@@ -1288,7 +1288,9 @@ if model_name == "De-weathered + Seasonal-Naive" and t is None:
 if model_name == "De-weathered + Seasonal-Naive":
     fut_temp_assume = st.sidebar.selectbox(
         "Future temperature assumption",
-        ["Repeat last 7 days", "Hold last day"], index=0
+        ["Repeat last 7 days", "Hold last day"],
+        index=0,
+        key="ts_temp_future_mode"
     )
 
 # ────────────────────────────── Sidebar footer / credentials ──────────────────────────────
@@ -3991,9 +3993,17 @@ def page_time_series_forecast(daily_all: pd.DataFrame | None,
                 max_value=int(max_initial),
                 value=int(default_initial),
                 step=7,
+                key="ts_bt_initial",
             )
         with c2:
-            step = st.number_input("Step size (days)", min_value=1, max_value=30, value=7, step=1)
+            step = st.number_input(
+                "Step size (days)",
+                min_value=1,
+                max_value=30,
+                value=7,
+                step=1,
+                key="ts_bt_step",
+            )
         with c3:
             bt_h = st.number_input(
                 "Horizon (days)",
@@ -4001,6 +4011,7 @@ def page_time_series_forecast(daily_all: pd.DataFrame | None,
                 max_value=int(max_bt_h),
                 value=int(default_bt_h),
                 step=1,
+                key="ts_bt_h",
             )
 
         def _roll_forecast(series: pd.Series, start: int, h: int, model: str) -> np.ndarray:
