@@ -1001,20 +1001,27 @@ with st.sidebar.expander("🛠 Actions", expanded=False):
 
 # ---------- Read URL page seed ----------
 PAGES = [
-    "Intro",
-    "Weather vs Bike Usage",
-    "Trip Metrics (Duration • Distance • Speed)",
-    "Member vs Casual Profiles",
-    "OD Flows — Sankey + Map",
-    "OD Matrix — Top Origins × Dest",
-    "Station Popularity",
-    "Station Imbalance (In vs Out)",
-    "Pareto: Share of Rides",
-    "Weekday × Hour Heatmap",
-    "Recommendations",
+    "Intro",                                   # context, overview, scope
+    "Weather vs Bike Usage",                   # external influence
+    "Trip Metrics (Duration • Distance • Speed)", # behavioral metrics
+    "Member vs Casual Profiles",               # segmentation
+    "Pareto: Share of Rides",                  # demand concentration insight
+    "Station Popularity",                      # top docks (where)
+    "OD Flows — Sankey + Map",                 # trip movement overview
+    "OD Matrix — Top Origins × Dest",          # detailed flow breakdown
+    "Station Imbalance (In vs Out)",           # operational challenge
+    "Weekday × Hour Heatmap",                  # temporal pattern synthesis
+    "Recommendations"                          # actions and strategy
 ]
+
+# ---------- Maintain URL state ----------
 _qp = _qp_get()
-_qp_page = (_qp.get("page", [None])[0] if isinstance(_qp.get("page"), list) else _qp.get("page")) or PAGES[0]
+_qp_page = (
+    _qp.get("page", [None])[0]
+    if isinstance(_qp.get("page"), list)
+    else _qp.get("page")
+) or PAGES[0]
+
 if _qp_page not in PAGES:
     _qp_page = PAGES[0]
 
