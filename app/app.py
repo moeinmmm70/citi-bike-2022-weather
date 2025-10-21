@@ -4222,6 +4222,19 @@ def page_recommendations(df_filtered: pd.DataFrame | None,
         unsafe_allow_html=True,
     )
 
+    # ── Layout density toggle
+    dense = st.sidebar.toggle("Compact layout", value=False, key="rec_dense")
+
+    st.markdown(f"""
+    <style>
+    :root {{
+        --pad-card: { '10px 12px' if dense else '14px 16px' };
+    }}
+    .rec-card {{ padding: var(--pad-card); }}
+    .step-card {{ padding: var(--pad-card); }}
+    </style>
+    """, unsafe_allow_html=True)
+
     # ── Hero
     st.markdown('<div class="hero">', unsafe_allow_html=True)
     st.subheader("🚀 Recommendations — evidence from this selection")
