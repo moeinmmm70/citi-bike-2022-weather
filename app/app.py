@@ -3462,13 +3462,16 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
             return None
         X = np.c_[np.ones(len(d)), d["avg_temp_c"], d["avg_temp_c"] ** 2]
         try:
-            a, b, c = np.linalg.lstsq(X, d["bike_rides_daily"], rcond=None)[0]
-            T = 20.0
-            y = a + b * T + c * T * T
-            dy = b + 2 * c * T
-            return float((dy / y) * 100.0) if y > 0 else None
+            a, b, c = np.linalg.lstsq(X, y, rcond=None)[0]
+            if c >= 0:  # curve opens upward -> no meaningful maximum
+                T_opt = np.nan
+            else:
+                T_opt = -b / (2*c)
+                # clamp to realistic riding temperatures
+                if T_opt < -10 or T_opt > 40:
+                    T_opt = np.nan
         except Exception:
-            return None
+            T_opt = np.nan
 
     def _top_share(df: pd.DataFrame, col: str, top_k: int = 20) -> float | None:
         if col not in df.columns or df.empty:
@@ -3516,6 +3519,11 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
     p_start = 0.0 if share_top20_start is None or (isinstance(share_top20_start, float) and np.isnan(share_top20_start)) else float(share_top20_start)
     p_end   = 0.0 if share_top20_end   is None or (isinstance(share_top20_end,   float) and np.isnan(share_top20_end))   else float(share_top20_end)
     rain_txt = f"{rain_pen:+.0f}%" if rain_pen is not None else "lower"
+
+    if np.isnan(T_opt):
+        st.info("Optimal temperature not reliable for this selection.")
+    else:
+        st.success(f"Estimated optimal temperature for demand: {T_opt:.1f} °C (quadratic fit)")
 
     # ── Styles
     st.markdown(
