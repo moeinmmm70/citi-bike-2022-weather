@@ -2,10 +2,10 @@
 # Author: Moein Mellat, 2025-10-21
 # Purpose: Visualize and analyze NYC Citi Bike 2022 data with interactive controls.
 
+
 # app/st_dashboard_Part_2.py
 from pathlib import Path
 import numpy as np
-import datetime as dt
 import pandas as pd
 import streamlit as st
 import plotly.express as px
@@ -51,15 +51,6 @@ MEMBER_LABELS = {
 MEMBER_LEGEND_TITLE = "Member Type"
 
 # ────────────────────────────── Helpers ───────────────────────────────────
-# Utility functions for handling query parameters
-def _qp_get():
-    return st.query_params.to_dict()
-
-def _qp_set(**kwargs):
-    for k, v in kwargs.items():
-        if v is not None:
-            st.query_params[k] = v
-
 def kfmt(x):
     try:
         x = float(x)
@@ -472,12 +463,8 @@ def _haversine_km(lat1, lon1, lat2, lon2):
     return 2*R*np.arcsin(np.sqrt(a))
     
 @st.cache_data
-def load_data():
-    df = pd.read_csv("data/trips.csv", parse_dates=["start_time", "end_time"])
-    df["date"] = df["start_time"].dt.date
-    return df
-
-df = load_data()
+def load_data(path: Path, _sig: float | None = None) -> pd.DataFrame:
+    df = pd.read_csv(path, low_memory=False)
 
     # ── Parse timestamps first
     for col in ["date", "started_at", "ended_at"]:
@@ -638,118 +625,146 @@ def inlier_mask(df: pd.DataFrame, col: str, lo=0.01, hi=0.995):
     return (s >= ql) & (s <= qh)
 
 # ────────────────────────────── Sidebar / Data ─────────────────────────────
-st.sidebar.title("🚲 Citi Bike 2022 Analysis")
+st.sidebar.header("⚙️ Controls")
 
-# --- Quick Actions ---
-st.sidebar.subheader("⚡ Quick Actions")
-if st.sidebar.button("✨ Commuter preset"):
-    st.query_params.update({
-        "page": "📑 Daily & Hourly Trends",
-        "hour_range": [6, 10],
-        "hour_range2": [16, 20],
-        "member_type": "member",
-        "temp_range": [10, 30],
-    })
-    st.rerun()
+# --- quick presets row
+col_p1, col_p2 = st.sidebar.columns([1,1])
+with col_p1:
+    if st.button("✨ Commuter preset"):
+        # Weekdays 6–10 & 16–20, mild temps, members
+        st.session_state["page_select"] = "Weekday × Hour Heatmap"
+        if "weekday" in df.columns:
+            weekdays = ["Mon","Tue","Wed","Thu","Fri"]; st.query_params.update(weekday=",".join(weekdays))
+        if "hour" in df.columns: st.query_params.update(hour0="6", hour1="20")
+        if "avg_temp_c" in df.columns:
+            tmin, tmax = float(np.nanmin(df["avg_temp_c"])), float(np.nanmax(df["avg_temp_c"]))
+            st.query_params.update(temp=f"{max(tmin,5)}:{min(tmax,25)}")
+        if "member_type" in df.columns: st.query_params.update(usertype="member")
 
-# Unified reset button
-if st.sidebar.button("♻️ Reset filters and reload"):
+with col_p2:
+    if st.button("🌧️ Rainy-day preset"):
+        st.session_state["page_select"] = "Weather vs Bike Usage"
+        if "wet_day" in df.columns: st.query_params.update(wet="1")
+
+# --- reset / share
+r1, r2 = st.sidebar.columns([1,1])
+with r1:
+    if st.button("♻️ Reset all"):
+        st.cache_data.clear()
+        if hasattr(st, "query_params"): st.query_params.clear()
+        st.rerun()
+with r2:
+    if st.button("🔗 Copy current link"):
+        st.sidebar.code(st.experimental_get_query_params() if not hasattr(st,"query_params") else dict(st.query_params))
+        st.caption("The current state is in the URL — copy from your browser bar.")
+
+if not DATA_PATH.exists():
+    st.sidebar.error(f"Missing data: {DATA_PATH}")
+    st.error("Data file not found. Create the ≤25MB sample CSV at data/processed/reduced_citibike_2022.csv.")
+    st.stop()
+
+df = load_data(DATA_PATH, DATA_PATH.stat().st_mtime)
+
+# Sidebar reload button (works on old/new Streamlit)
+if st.sidebar.button("🔄 Reload data"):
     st.cache_data.clear()
-    st.query_params.clear()
-    st.rerun()
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:
+        st.experimental_rerun()
 
-# --- Filters ---
-st.sidebar.subheader("🎛️ Filters")
+# Date range
+date_min = pd.to_datetime(df["date"].min()) if "date" in df.columns else None
+date_max = pd.to_datetime(df["date"].max()) if "date" in df.columns else None
+date_range = st.sidebar.date_input("Date range", value=(date_min, date_max)) if date_min is not None else None
 
-daterange = st.sidebar.date_input(
-    "Date range",
-    value=(dt.date(2022, 1, 1), dt.date(2022, 12, 31)),
-    min_value=dt.date(2022, 1, 1),
-    max_value=dt.date(2022, 12, 31),
-    help="Select the start and end date for analysis."
-)
+# Season
+seasons_all = ["Winter","Spring","Summer","Autumn"]
+seasons = st.sidebar.multiselect("Season(s)", seasons_all, default=seasons_all) if "season" in df.columns else None
 
-season = st.sidebar.multiselect(
-    "Season",
-    ["Winter", "Spring", "Summer", "Autumn"],
-    default=["Winter", "Spring", "Summer", "Autumn"],
-    help="Filter by meteorological seasons."
-)
-
-member_type = st.sidebar.radio(
-    "Member type",
-    ["all", "member", "casual"],
-    index=0,
-    help="Choose rider type to analyze."
-)
-
-# --- Advanced Filters ---
-with st.sidebar.expander("⚙️ More filters"):
-    temp_range = st.slider(
-        "Temperature (°C)",
-        -10, 40, (-10, 40),
-        help="Filter by average trip temperature."
+# Member type (pretty labels; raw value for filtering)
+usertype = None
+if "member_type" in df.columns:
+    raw_opts = ["All"] + sorted(df["member_type"].astype(str).unique().tolist())
+    usertype = st.sidebar.selectbox(
+        "User type",
+        raw_opts,
+        format_func=lambda v: "All" if v == "All" else MEMBER_LABELS.get(v, str(v).title())
     )
 
-    hour_range = st.slider(
-        "Hour of day",
-        0, 23, (0, 23),
-        help="Filter trips by starting hour."
-    )
+# --- Time filters (kept visible) ---
+hour_range = None
+if "hour" in df.columns:
+    hour_range = st.sidebar.slider("Hour of day", 0, 23, (6, 22), key="hour_slider")
 
-    weekdays = st.multiselect(
-        "Days of week",
-        ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
-        default=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
-        help="Select days to include in analysis."
-    )
+# --- Collapsed: less-used filters ---
+temp_range, weekdays = None, None
+with st.sidebar.expander("More filters", expanded=False):
+    # Temperature
+    if "avg_temp_c" in df.columns:
+        tmin = float(np.nanmin(df["avg_temp_c"]))
+        tmax = float(np.nanmax(df["avg_temp_c"]))
+        temp_range = st.slider("Temperature (°C)", tmin, tmax, (tmin, tmax), key="temp_slider")
 
-    robust = st.toggle(
-        "Exclude extreme outliers",
-        value=True,
-        help="Remove top 0.5% of trip durations and speeds."
-    )
+    # Weekdays
+    if "weekday" in df.columns:
+        weekday_names = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
+        weekdays = st.multiselect("Weekday(s)", weekday_names, default=weekday_names, key="weekday_multi")
 
-# --- Share Link ---
 st.sidebar.markdown("---")
-st.sidebar.caption("🔗 Share this view by copying the URL.")
-st.sidebar.markdown("---")
+
+# ── URL state: read (on load) and write (after filters) ──
+def _qp_get():
+    if hasattr(st, "query_params"):  # Streamlit ≥1.31
+        return dict(st.query_params)
+    return st.experimental_get_query_params()
+
+def _qp_set(**kv):
+    try:
+        if hasattr(st, "query_params"):
+            st.query_params.update({k: str(v) for k, v in kv.items() if v is not None})
+        else:
+            st.experimental_set_query_params(**{k: str(v) for k, v in kv.items() if v is not None})
+    except Exception:
+        pass
 
 PAGES = [
     "Intro",
     "Weather vs Bike Usage",
-    "📑 Daily & Hourly Trends",
-    "Member vs Casual Profiles",
     "Trip Metrics (Duration • Distance • Speed)",
-    "Station Popularity",
-    "Pareto: Share of Rides",
+    "Member vs Casual Profiles",
     "OD Flows — Sankey + Map",
     "OD Matrix — Top Origins × Dest",
+    "Station Popularity",
     "Station Imbalance (In vs Out)",
+    "Pareto: Share of Rides",
+    "Weekday × Hour Heatmap",
     "Recommendations",
 ]
 
-# Resolve page from URL param if present
+# Seed default page from URL (if present), otherwise first page
 _qp = _qp_get()
-_qp_page = _qp.get("page", [PAGES[0]])[0]
+_qp_page = None
+if "page" in _qp:
+    _qp_page = _qp["page"][0] if isinstance(_qp["page"], list) else _qp["page"]
 if _qp_page not in PAGES:
     _qp_page = PAGES[0]
 
-# Select page
+# The widget value drives the app; we do NOT override it afterwards
 page = st.sidebar.selectbox(
     "📑 Analysis page",
     PAGES,
     index=PAGES.index(_qp_page),
-    key="page_select"
+    key="page_select",
 )
 
-# Write filter state to query params
+# After filters chosen → write them to URL (safe)
 try:
     _qp_set(
         page=page,
-        date0=str(daterange[0]) if daterange else None,
-        date1=str(daterange[1]) if daterange else None,
-        usertype=member_type or "all",
+        date0=str(date_range[0]) if date_range else None,
+        date1=str(date_range[1]) if date_range else None,
+        usertype=usertype or "All",
         hour0=hour_range[0] if hour_range else None,
         hour1=hour_range[1] if hour_range else None
     )
@@ -759,9 +774,9 @@ except Exception:
 # Filtered data
 df_f = apply_filters(
     df,
-    (pd.to_datetime(daterange[0]), pd.to_datetime(daterange[1])) if daterange else None,
-    season,
-    member_type,
+    (pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])) if date_range else None,
+    seasons,
+    usertype,
     temp_range,
     hour_range=hour_range,
     weekdays=weekdays,
@@ -787,6 +802,7 @@ def _backfill_trip_weather(df_trips: pd.DataFrame, daily_df: pd.DataFrame) -> pd
 
     # ensure both are datetime (day-level) for mapping
     out["date"] = pd.to_datetime(out["date"], errors="coerce")
+    # daily_df['date'] is already datetime from ensure_daily()
 
     for col, mapper in lookups.items():
         if col not in out.columns or out[col].notna().sum() == 0:
