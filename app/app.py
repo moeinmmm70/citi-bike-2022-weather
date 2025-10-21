@@ -4223,20 +4223,22 @@ def page_recommendations(df_filtered: pd.DataFrame | None,
         }
         .step-card:hover{ transform: translateY(-1px); border-color: rgba(255,255,255,.16); }
         .step-num{
-          font-weight:700; font-size:.80rem;
-          color:#0f172a;                     /* dark text for contrast */
-          background: var(--accent-1);       /* use your accent blue */
-          border:1px solid rgba(255,255,255,.14);
+          font-weight:700;
+          font-size:.80rem;
+          color:#0f172a !important;              /* enforce dark text on light accent */
+          background: var(--accent-1) !important;/*bright blue accent */
+          border:none !important;
           border-radius:999px;
-          padding:3px 10px;
+          padding:4px 10px;
           display:inline-block;
-          margin-bottom:6px;
-          box-shadow:0 1px 3px rgba(0,0,0,.25);
+          margin-bottom:8px;
+          box-shadow:0 2px 4px rgba(0,0,0,.25);
+          transition: all .15s ease-in-out;
         }
         .step-card:hover .step-num{
-          background: var(--accent-2);       /* purple accent on hover */
-          color:white;
-          transition: background .15s ease;
+          background: var(--accent-2) !important; /* switch to violet accent on hover */
+          color:#ffffff !important;
+          transform: translateY(-1px);
         }
         .step-title{ color:#f8fafc; font-weight:700; margin:2px 0 6px 0; }
         .step-desc{ color:var(--fg-2); font-size:.92rem; line-height:1.35rem; }
