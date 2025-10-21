@@ -1221,6 +1221,19 @@ def _backfill_trip_weather(df_trips: pd.DataFrame, daily_df: pd.DataFrame) -> pd
 df_f = _backfill_trip_weather(df_f, daily_all)
 
 # ────────────────────────────── Sidebar forecasting controls ──────────────────────────────
+
+try:
+    from statsmodels.tsa.statespace.sarimax import SARIMAX
+    HAS_SARIMAX = True
+except Exception:
+    HAS_SARIMAX = False
+    
+try:
+    from statsmodels.tsa.seasonal import STL
+    HAS_STL = True
+except Exception:
+    HAS_STL = False
+    
 st.sidebar.markdown("### ⏱ TS Controls")
 horizon = st.sidebar.slider("Forecast horizon (days)", 7, 60, 21, 1)
 show_last_n = st.sidebar.slider("Plot history window (days)", 60, 365, 180, 10)
@@ -3608,19 +3621,6 @@ def page_time_series_forecast(daily_all: pd.DataFrame | None,
     optional SARIMAX(weekly), and De-weathered + Seasonal-Naive.
     Includes rolling-origin backtest for any selected model.
     """
-    # Optional libs
-    try:
-        from statsmodels.tsa.seasonal import STL  # type: ignore
-        HAS_STL = True
-    except Exception:
-        HAS_STL = False
-
-    try:
-        from statsmodels.tsa.statespace.sarimax import SARIMAX  # type: ignore
-        HAS_SARIMAX = True
-    except Exception:
-        HAS_SARIMAX = False
-
     st.header("📆 Time Series — Forecast & Decomposition")
 
     # ----- Guardrails & data prep -----
