@@ -3706,7 +3706,8 @@ def page_time_series_forecast(daily_all: pd.DataFrame | None,
         # not enough history → naive
         yhat = np.full(h, float(series.iloc[-1]))
         resid = series.diff().dropna().to_numpy(dtype=float)
-        return yhat, * _pi_from_resid(yhat, resid)
+        lo, hi = _pi_from_resid(yhat, resid)
+        return yhat, lo, hi
 
     last_season = series.iloc[-season:].to_numpy(dtype=float)
     # If last season is (near-)constant, don’t mislead—blend to MA level
