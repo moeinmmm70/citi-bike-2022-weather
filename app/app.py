@@ -472,8 +472,10 @@ def _haversine_km(lat1, lon1, lat2, lon2):
     return 2*R*np.arcsin(np.sqrt(a))
     
 @st.cache_data
-def load_data(path: Path, _sig: float | None = None) -> pd.DataFrame:
-    df = pd.read_csv(path, low_memory=False)
+def load_data():
+    return pd.read_csv("data/citibike_2022_cleaned.csv", parse_dates=["starttime", "stoptime"])
+
+df = load_data()
 
     # ── Parse timestamps first
     for col in ["date", "started_at", "ended_at"]:
