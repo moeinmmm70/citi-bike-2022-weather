@@ -3191,9 +3191,9 @@ def page_station_imbalance(df_filtered: pd.DataFrame) -> None:
 
         vmax = float(np.abs(geo["imbalance"]).max())
         suffix_key = "".join(ch for ch in str(suffix) if ch.isalnum()).lower() or "all"
-        scale = st.slider("Map bubble scale", 1, 15, 5, key=f"imb_map_scale_{suffix_key}")
+        scale = st.slider("Map bubble scale", 1, 12, 5, key=f"imb_map_scale_{suffix_key}")
 
-        geo["radius"] = (60 + scale * (np.sqrt(np.abs(geo["imbalance"])) / np.sqrt(vmax if vmax > 0 else 1)) * 120).astype(float)
+        geo["radius"] = (10 + scale * (np.sqrt(np.abs(geo["imbalance"])) / np.sqrt(vmax if vmax > 0 else 1)) * 120).astype(float)
         geo["color"]  = [[34, 197, 94, 210] if v >= 0 else [220, 38, 38, 210] for v in geo["imbalance"].to_numpy()]
 
         def ascii_safe(s: pd.Series) -> pd.Series:
