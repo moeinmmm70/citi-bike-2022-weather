@@ -1220,79 +1220,6 @@ def _backfill_trip_weather(df_trips: pd.DataFrame, daily_df: pd.DataFrame) -> pd
 
 df_f = _backfill_trip_weather(df_f, daily_all)
 
-# ────────────────────────────── Sidebar forecasting controls ──────────────────────────────
-##### TS base series ####
-# Choose the daily table to model
-d_base = daily_f if (daily_f is not None and not daily_f.empty) else daily_all
-
-if d_base is None or d_base.empty or "date" not in d_base.columns or "bike_rides_daily" not in d_base.columns:
-    st.info("Need a daily table with `date` and `bike_rides_daily` to run forecasting.")
-    st.stop()
-
-# Ensure datetime and sort
-d_base = d_base.copy().sort_values("date")
-if not pd.api.types.is_datetime64_any_dtype(d_base["date"]):
-    d_base["date"] = pd.to_datetime(d_base["date"], errors="coerce")
-
-# Build continuous daily index for rides
-s = (
-    d_base.set_index("date")["bike_rides_daily"]
-         .asfreq("D")
-         .interpolate(limit_direction="both")
-)
-
-# Optional temperature series (for de-weathered model)
-t = None
-for c in ["avg_temp_c", "avgTemp", "t_mean_c", "tmin_c", "tmax_c"]:
-    if c in d_base.columns:
-        t = (
-            d_base.set_index("date")[c]
-                  .asfreq("D")
-                  .interpolate(limit_direction="both")
-        )
-        break
-
-# If temp exists but is all-NaN after alignment, ignore it
-if t is not None and t.isna().all():
-    t = None
-
-try:
-    from statsmodels.tsa.statespace.sarimax import SARIMAX
-    HAS_SARIMAX = True
-except Exception:
-    HAS_SARIMAX = False
-    
-try:
-    from statsmodels.tsa.seasonal import STL
-    HAS_STL = True
-except Exception:
-    HAS_STL = False
-    
-st.sidebar.markdown("### ⏱ TS Controls")
-horizon = st.sidebar.slider("Forecast horizon (days)", 7, 60, 21, 1, key="ts_horizon")
-show_last_n = st.sidebar.slider("Plot history window (days)", 60, 365, 180, 10, key="ts_history")
-
-model_name = st.sidebar.selectbox(
-    "Model",
-    ["Seasonal-Naive (t−7)", "Naive (t−1)", "7-day Moving Average", "SARIMAX (weekly)", "De-weathered + Seasonal-Naive"],
-    index=0,
-    key="ts_model"
-)
-
-if model_name == "SARIMAX (weekly)" and not HAS_SARIMAX:
-    st.sidebar.warning("`statsmodels` not available — SARIMAX disabled")
-
-if model_name == "De-weathered + Seasonal-Naive" and t is None:
-    st.sidebar.warning("No temperature column found — fallback to Seasonal-Naive.")
-
-if model_name == "De-weathered + Seasonal-Naive":
-    fut_temp_assume = st.sidebar.selectbox(
-        "Future temperature assumption",
-        ["Repeat last 7 days", "Hold last day"],
-        index=0,
-        key="ts_temp_future_mode"
-    )
-
 # ────────────────────────────── Sidebar footer / credentials ──────────────────────────────
 st.sidebar.markdown("---")
 st.sidebar.markdown("**👤 Moein Mellat, PhD**")
@@ -3848,7 +3775,7 @@ def page_time_series_forecast(daily_all: pd.DataFrame | None,
         meta = {"beta0": float(beta[0]), "beta1_temp": float(beta[1]), "fut_temp_mode": fut_temp_mode}
         return yhat, lo, hi, meta
 
-    # ── Sidebar controls (build AFTER s, t so warnings can reference them)
+    # ── Sidebar controls
     st.sidebar.markdown("### ⏱ TS Controls")
     horizon = st.sidebar.slider("Forecast horizon (days)", 7, 60, 21, 1)
     show_last_n = st.sidebar.slider("Plot history window (days)", 60, 365, 180, 10)
