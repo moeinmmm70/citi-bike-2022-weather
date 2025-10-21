@@ -1657,17 +1657,19 @@ def page_weather_vs_usage(daily_filtered: pd.DataFrame) -> None:
         if out is None:
             st.info("Need daily rides + avg_temp_c for de-weathering.")
         else:
-            yhat, resid_pct, coefs = out
+            # handle 3- or 4-tuple returns
+            yhat, resid_pct, coefs = out[:3]
+
             dd = pd.DataFrame({"date": d["date"], "resid_pct": resid_pct, "expected": yhat}).dropna()
             figr = px.line(dd, x="date", y="resid_pct",
                            labels={"resid_pct": "Residual vs expected (%)", "date": "Date"})
             figr.add_hline(y=0, line_dash="dot")
             figr.update_layout(height=420, title="De-weathered demand index (over/under performance)")
             st.plotly_chart(figr, use_container_width=True)
+            
             st.metric("Avg residual (last 30 days)", f"{dd.tail(30)['resid_pct'].mean():+.1f}%")
             with st.expander("Model drivers (top |β|)"):
                 st.write(coefs.sort_values(key=np.abs, ascending=False).head(10).round(3))
-
 
 # --- Page routing (place this after defining all page_* functions) ---
 
