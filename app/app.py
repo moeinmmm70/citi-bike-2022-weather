@@ -4355,6 +4355,19 @@ def page_recommendations(df_filtered: pd.DataFrame | None,
     with k3: st.metric("Truck km / rebalanced bike", "−15%")
     with k4: st.metric("On-time dock readiness", "≥ 90%")
 
+    # ── Table styling (compact zebra theme)
+    st.markdown("""
+    <style>
+    .dataframe tbody tr:nth-child(odd) {
+        background: rgba(148,163,184,.06);
+    }
+    .dataframe td, .dataframe th {
+        padding: .45rem .6rem !important;
+        font-size: .92rem;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
     # ── Evidence tabs
     tab1, tab2, tab3, tab4 = st.tabs(["🧭 Imbalance focus", "🚚 Hot-20 Pilot Plan", "📈 Trend (rides vs temp)", "📦 Download evidence"])
 
