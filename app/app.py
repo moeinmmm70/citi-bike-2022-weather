@@ -695,6 +695,34 @@ def _slug(s: str) -> str:
     # Collapse multiple spaces and lowercase
     return " ".join(s.split()).lower()
 
+# ---------- URL helpers (future-proof) ----------
+def _qp_get() -> dict:
+    """
+    Return current query params as a simple dict of scalars (not lists).
+    Example: {"page": "Intro", "usertype": "All"}
+    """
+    try:
+        qp = dict(st.query_params)  # Streamlit ≥1.31
+    except Exception:
+        # Fallback for older versions
+        qp = st.experimental_get_query_params()
+    # Unwrap one-element lists
+    return {k: (v[0] if isinstance(v, list) and len(v) == 1 else v) for k, v in qp.items()}
+
+def _qp_set(qp: dict) -> None:
+    """
+    Accepts scalars or lists. Writes scalars to the URL.
+    Only updates the querystring; does not rerun.
+    """
+    # Flatten one-element lists to scalars
+    flat = {k: (v[0] if isinstance(v, list) and len(v) == 1 else v) for k, v in qp.items()}
+    try:
+        st.query_params.clear()
+        st.query_params.update(flat)  # Streamlit ≥1.31
+    except Exception:
+        # Fallback for older versions
+        st.experimental_set_query_params(**flat)
+
 # ──────────────── UI Helpers (Hero Panel + KPI Cards) ────────────────
 
 def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
@@ -1065,9 +1093,8 @@ if _qp_page not in PAGES:
 
 page = st.sidebar.selectbox("📑 Analysis page", PAGES, index=PAGES.index(_qp_page), key="page_select")
 
-# --- Sidebar paging controls (uses your URL state helpers) ---
+# --- Sidebar paging controls (Prev / Next) ---
 idx = PAGES.index(page)
-
 col_prev, col_next = st.sidebar.columns(2)
 prev_clicked = col_prev.button("◀ Prev", use_container_width=True)
 next_clicked = col_next.button("Next ▶", use_container_width=True)
@@ -1076,16 +1103,21 @@ if prev_clicked or next_clicked:
     new_idx = (idx - 1) % len(PAGES) if prev_clicked else (idx + 1) % len(PAGES)
     new_page = PAGES[new_idx]
 
-    # preserve all existing query params, just swap the page
+    # Preserve all existing params, just swap the page
     qp = _qp_get()
     qp["page"] = new_page
     _qp_set(qp)
 
-    # rerun to apply
+    # Rerun to navigate
     try:
         st.rerun()
     except Exception:
         st.experimental_rerun()
+
+if _qp_page != page:
+    qp = _qp_get()
+    qp["page"] = page
+    _qp_set(qp)
 
 # ---------- Primary filters ----------
 date_min = pd.to_datetime(df["date"].min()) if "date" in df.columns else None
