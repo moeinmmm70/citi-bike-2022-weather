@@ -51,6 +51,15 @@ MEMBER_LABELS = {
 MEMBER_LEGEND_TITLE = "Member Type"
 
 # ────────────────────────────── Helpers ───────────────────────────────────
+# Utility functions for handling query parameters
+def _qp_get():
+    return st.query_params.to_dict()
+
+def _qp_set(**kwargs):
+    for k, v in kwargs.items():
+        if v is not None:
+            st.query_params[k] = v
+
 def kfmt(x):
     try:
         x = float(x)
