@@ -753,135 +753,130 @@ def render_hero_panel(
     )
 
 # ────────────────────────────── Data loading & features ────────────────────
-def _haversine_km(lat1, lon1, lat2, lon2):
+
+# Small, readable constants
+WEEKDAY_MAP = {"Mon":0,"Tue":1,"Wed":2,"Thu":3,"Fri":4,"Sat":5,"Sun":6}
+SEASON_MAP  = {12:"Winter",1:"Winter",2:"Winter",3:"Spring",4:"Spring",5:"Spring",
+               6:"Summer",7:"Summer",8:"Summer",9:"Autumn",10:"Autumn",11:"Autumn"}
+
+def _haversine_km(lat1, lon1, lat2, lon2) -> np.ndarray:
+    """Vectorized great-circle distance (km). Inputs can be scalars/arrays/Series."""
     R = 6371.0088
     lat1, lon1, lat2, lon2 = map(np.deg2rad, [lat1, lon1, lat2, lon2])
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
+    dlat, dlon = (lat2 - lat1), (lon2 - lon1)
     a = np.sin(dlat/2.0)**2 + np.cos(lat1)*np.cos(lat2)*np.sin(dlon/2.0)**2
-    return 2*R*np.arcsin(np.sqrt(a))
-    
-@st.cache_data
-def load_data(path: Path, _sig: float | None = None) -> pd.DataFrame:
+    return 2 * R * np.arcsin(np.sqrt(a))
+
+
+@st.cache_data(show_spinner=False)
+def load_data(path: Path, weather_path: Path | None = Path("data/processed/nyc_weather_2022_daily_full.csv")) -> pd.DataFrame:
+    """Load trips CSV, parse timestamps, enrich weather, and derive core features."""
     df = pd.read_csv(path, low_memory=False)
 
-    # ── Parse timestamps first
-    for col in ["date", "started_at", "ended_at"]:
+    # --- Timestamps
+    for col in ("date", "started_at", "ended_at"):
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce")
-
-    # Ensure 'date' exists
     if "date" not in df.columns and "started_at" in df.columns:
         df["date"] = pd.to_datetime(df["started_at"], errors="coerce").dt.floor("D")
 
-    # ── Enrich with full daily weather if available (merge on 'date')
-    wx_path = Path("data/processed/nyc_weather_2022_daily_full.csv")
-    if wx_path.exists() and "date" in df.columns:
-        wx = pd.read_csv(wx_path, parse_dates=["date"])
-        keep_cols = [c for c in wx.columns if c in [
-            "date","avg_temp_c","tmin_c","tmax_c",
-            "precip_mm","snow_mm","snow_depth_mm",
-            "wind_mps","wind_kph","gust_mps","gust_kph",
-            "wet_day","precip_bin","wind_bin"
-        ] or c.startswith("wt")]
-        wx = wx[keep_cols].copy()
-        df = df.merge(wx, on="date", how="left")
+    # --- Weather (per-day) join on 'date'
+    if weather_path and weather_path.exists() and "date" in df.columns:
+        wx = pd.read_csv(weather_path, parse_dates=["date"])
+        keep = [c for c in wx.columns if c in {
+            "date","avg_temp_c","tmin_c","tmax_c","precip_mm","snow_mm","snow_depth_mm",
+            "wind_mps","wind_kph","gust_mps","gust_kph","wet_day","precip_bin","wind_bin"
+        } or c.startswith("wt")]
+        df = df.merge(wx[keep].copy(), on="date", how="left")
 
-    # ── Season if missing
+    # --- Season (if missing)
     if "season" not in df.columns and "date" in df.columns:
-        def season_from_month(m):
-            if m in (12, 1, 2):  return "Winter"
-            if m in (3, 4, 5):   return "Spring"
-            if m in (6, 7, 8):   return "Summer"
-            return "Autumn"
-        df["season"] = df["date"].dt.month.map(season_from_month).astype("category")
+        df["season"] = df["date"].dt.month.map(SEASON_MAP).astype("category")
 
-    # ── Trip metrics
+    # --- Trip metrics
     if {"started_at","ended_at"}.issubset(df.columns):
-        dur = (df["ended_at"] - df["started_at"]).dt.total_seconds() / 60.0
-        df["duration_min"] = dur.clip(lower=0)
+        dur_min = (df["ended_at"] - df["started_at"]).dt.total_seconds() / 60.0
+        df["duration_min"] = pd.to_numeric(dur_min, errors="coerce").clip(lower=0)
 
     if {"start_lat","start_lng","end_lat","end_lng"}.issubset(df.columns):
-        df["distance_km"] = _haversine_km(
-            df["start_lat"], df["start_lng"], df["end_lat"], df["end_lng"]
-        ).astype(float)
+        df["distance_km"] = _haversine_km(df["start_lat"], df["start_lng"], df["end_lat"], df["end_lng"]).astype(float)
 
     if "duration_min" in df.columns and "distance_km" in df.columns:
-        df["speed_kmh"] = (
-            df["distance_km"] / (df["duration_min"] / 60.0)
-        ).replace([np.inf, -np.inf], np.nan).clip(upper=60)
+        # Guard against divide-by-zero and hard cap to plausible city speeds
+        spd = df["distance_km"] / (df["duration_min"] / 60.0)
+        df["speed_kmh"] = pd.to_numeric(spd, errors="coerce").replace([np.inf, -np.inf], np.nan).clip(upper=60)
 
-    # ── Temporal fields
+    # --- Temporal fields (fast accessors)
     if "started_at" in df.columns:
         ts = df["started_at"]
         df["hour"]    = ts.dt.hour
         df["weekday"] = ts.dt.weekday
         df["month"]   = ts.dt.to_period("M").dt.to_timestamp()
 
-    # ── Categories for perf
-    for c in ["start_station_name","end_station_name","member_type","rideable_type","season"]:
+    # --- Categories (compact memory + faster groupby)
+    for c in ("start_station_name","end_station_name","member_type","rideable_type","season"):
         if c in df.columns:
             df[c] = df[c].astype("category")
 
-    # ── Pretty legend text for member_type
+    # --- Pretty member labels
     if "member_type" in df.columns:
+        # MEMBER_LABELS is expected to be defined elsewhere; fall back to title-case
         df["member_type_display"] = (
-            df["member_type"].astype(str)
-              .map(MEMBER_LABELS)
-              .fillna(df["member_type"].astype(str).str.title())
+            df["member_type"].astype(str).map(MEMBER_LABELS).fillna(df["member_type"].astype(str).str.title())
         ).astype("category")
 
     return df
 
+
 def ensure_daily(df: pd.DataFrame) -> pd.DataFrame | None:
+    """Aggregate trip rows to daily table with weather attached."""
     if df is None or df.empty or "date" not in df.columns:
         return None
 
-    # --- Ensure we have a temp column available at the row level
-    if "avg_temp_c" not in df.columns and {"tmin_c", "tmax_c"}.issubset(df.columns):
-        with pd.option_context("mode.use_inf_as_na", True):
-            df = df.copy()
-            df["avg_temp_c"] = (pd.to_numeric(df["tmin_c"], errors="coerce") + 
-                                pd.to_numeric(df["tmax_c"], errors="coerce")) / 2.0
+    out = df.copy()
 
-    # Base: rides per day
-    daily = df.groupby("date", as_index=False).size().rename(columns={"size":"bike_rides_daily"})
+    # Ensure avg_temp_c exists if min/max present
+    if "avg_temp_c" not in out.columns and {"tmin_c","tmax_c"}.issubset(out.columns):
+        out["avg_temp_c"] = (pd.to_numeric(out["tmin_c"], errors="coerce") + pd.to_numeric(out["tmax_c"], errors="coerce")) / 2.0
 
-    # Attach weather fields (use first/mean sensibly; daily NOAA is already per-day)
-    attach = {}
-    if "avg_temp_c"   in df.columns: attach["avg_temp_c"]   = "mean"
-    if "tmin_c"       in df.columns: attach["tmin_c"]       = "mean"
-    if "tmax_c"       in df.columns: attach["tmax_c"]       = "mean"
-    if "precip_mm"    in df.columns: attach["precip_mm"]    = "mean"
-    if "snow_mm"      in df.columns: attach["snow_mm"]      = "mean"
-    if "wind_kph"     in df.columns: attach["wind_kph"]     = "mean"
-    if "gust_kph"     in df.columns: attach["gust_kph"]     = "mean"
-    if "wet_day"      in df.columns: attach["wet_day"]      = "max"   # boolean-ish
-    if "precip_bin"   in df.columns: attach["precip_bin"]   = lambda s: s.mode().iloc[0] if len(s.mode()) else np.nan
-    if "wind_bin"     in df.columns: attach["wind_bin"]     = lambda s: s.mode().iloc[0] if len(s.mode()) else np.nan
+    # Base: rides/day
+    daily = out.groupby("date", as_index=False).size().rename(columns={"size": "bike_rides_daily"})
 
-    if attach:
-        w = df.groupby("date", as_index=False).agg(attach)
+    # Attach daily weather (means, max for booleans, mode for bins)
+    agg: dict[str, str | callable] = {}
+    for c in ("avg_temp_c","tmin_c","tmax_c","precip_mm","snow_mm","wind_kph","gust_kph"):
+        if c in out.columns: agg[c] = "mean"
+    if "wet_day" in out.columns:    agg["wet_day"]  = "max"
+    if "precip_bin" in out.columns: agg["precip_bin"] = lambda s: s.mode().iloc[0] if len(s.mode()) else np.nan
+    if "wind_bin" in out.columns:   agg["wind_bin"]   = lambda s: s.mode().iloc[0] if len(s.mode()) else np.nan
+
+    if agg:
+        w = out.groupby("date", as_index=False).agg(agg)
         daily = daily.merge(w, on="date", how="left")
 
-    # Season (mode)
-    if "season" in df.columns:
-        s = df.groupby("date")["season"].agg(lambda s: s.mode().iloc[0] if len(s.mode()) else np.nan).reset_index()
+    # Season (mode per day)
+    if "season" in out.columns:
+        s = out.groupby("date")["season"].agg(lambda s: s.mode().iloc[0] if len(s.mode()) else np.nan).reset_index()
         daily = daily.merge(s, on="date", how="left")
 
     return daily.sort_values("date")
 
-def apply_filters(df: pd.DataFrame,
-                  daterange: tuple[pd.Timestamp, pd.Timestamp] | None,
-                  seasons: list[str] | None,
-                  usertype: str | None,
-                  temp_range: tuple[float, float] | None,
-                  hour_range: tuple[int, int] | None = None,
-                  weekdays: list[str] | None = None) -> pd.DataFrame:
+
+def apply_filters(
+    df: pd.DataFrame,
+    daterange: tuple[pd.Timestamp, pd.Timestamp] | None,
+    seasons: list[str] | None,
+    usertype: str | None,
+    temp_range: tuple[float, float] | None,
+    hour_range: tuple[int, int] | None = None,
+    weekdays: list[str] | None = None,
+) -> pd.DataFrame:
+    """Apply common dashboard filters; returns a filtered copy."""
     out = df.copy()
 
     if daterange and "date" in out.columns:
-        out = out[(out["date"] >= pd.to_datetime(daterange[0])) & (out["date"] <= pd.to_datetime(daterange[1]))]
+        d0, d1 = map(pd.to_datetime, daterange)
+        out = out[(out["date"] >= d0) & (out["date"] <= d1)]
 
     if seasons and "season" in out.columns:
         out = out[out["season"].isin(seasons)]
@@ -890,133 +885,59 @@ def apply_filters(df: pd.DataFrame,
         out = out[out["member_type"].astype(str) == usertype]
 
     if temp_range and "avg_temp_c" in out.columns:
-        out = out[(out["avg_temp_c"] >= temp_range[0]) & (out["avg_temp_c"] <= temp_range[1])]
+        lo, hi = temp_range
+        out = out[(out["avg_temp_c"] >= lo) & (out["avg_temp_c"] <= hi)]
 
     if hour_range and "hour" in out.columns:
         lo, hi = hour_range
         out = out[(out["hour"] >= lo) & (out["hour"] <= hi)]
 
     if weekdays and "weekday" in out.columns:
-        name_to_idx = {"Mon":0,"Tue":1,"Wed":2,"Thu":3,"Fri":4,"Sat":5,"Sun":6}
-        idxs = [name_to_idx[w] for w in weekdays if w in name_to_idx]
+        idxs = [WEEKDAY_MAP[w] for w in weekdays if w in WEEKDAY_MAP]
         out = out[out["weekday"].isin(idxs)]
 
     return out
 
-def compute_core_kpis(df_f: pd.DataFrame, daily_f: pd.DataFrame | None):
-    total_rides = len(df_f)
+
+def compute_core_kpis(df_f: pd.DataFrame, daily_f: pd.DataFrame | None) -> dict:
+    """Return small set of KPIs used on the hero cards."""
+    total_rides = int(len(df_f))
     avg_day = float(daily_f["bike_rides_daily"].mean()) if daily_f is not None and not daily_f.empty else None
-    corr_tr = safe_corr(daily_f.set_index("date")["bike_rides_daily"], daily_f.set_index("date")["avg_temp_c"]) \
-              if daily_f is not None and "avg_temp_c" in daily_f.columns else None
+    corr_tr = None
+    if daily_f is not None and {"date","bike_rides_daily","avg_temp_c"}.issubset(daily_f.columns):
+        s1 = daily_f.set_index("date")["bike_rides_daily"]
+        s2 = daily_f.set_index("date")["avg_temp_c"]
+        corr_tr = safe_corr(s1, s2)  # uses your earlier helper
     return dict(total_rides=total_rides, avg_day=avg_day, corr_tr=corr_tr)
 
-# Robust plotting helpers
-def quantile_bounds(s: pd.Series, lo=0.01, hi=0.995):
-    s = pd.to_numeric(s, errors="coerce")
+
+# ───────── Robust plotting helpers ─────────
+
+def quantile_bounds(s: pd.Series, lo: float = 0.01, hi: float = 0.995) -> tuple[float, float]:
+    """Return (lo, hi) empirical quantiles; safe on empty or non-numeric Series."""
+    s = pd.to_numeric(s, errors="coerce").dropna()
+    if s.empty:
+        return (float("nan"), float("nan"))
     ql, qh = s.quantile(lo), s.quantile(hi)
     return float(ql), float(qh)
 
-def inlier_mask(df: pd.DataFrame, col: str, lo=0.01, hi=0.995):
-    if col not in df.columns:
-        return pd.Series([True]*len(df), index=df.index)
+def inlier_mask(df: pd.DataFrame, col: str, lo: float = 0.01, hi: float = 0.995) -> pd.Series:
+    """Boolean mask for rows within [lo, hi] quantiles of column `col`."""
+    if col not in df.columns or df.empty:
+        return pd.Series([True] * len(df), index=df.index)
     s = pd.to_numeric(df[col], errors="coerce")
     ql, qh = quantile_bounds(s, lo, hi)
+    if not np.isfinite(ql) or not np.isfinite(qh):
+        return pd.Series([True] * len(df), index=df.index)
     return (s >= ql) & (s <= qh)
 
 # ────────────────────────────── Sidebar / Data ─────────────────────────────
+
 st.sidebar.header("⚙️ Controls")
 
-# --- quick presets row
-col_p1, col_p2 = st.sidebar.columns([1,1])
-with col_p1:
-    if st.button("✨ Commuter preset"):
-        # Weekdays 6–10 & 16–20, mild temps, members
-        st.session_state["page_select"] = "Weekday × Hour Heatmap"
-        if "weekday" in df.columns:
-            weekdays = ["Mon","Tue","Wed","Thu","Fri"]; st.query_params.update(weekday=",".join(weekdays))
-        if "hour" in df.columns: st.query_params.update(hour0="6", hour1="20")
-        if "avg_temp_c" in df.columns:
-            tmin, tmax = float(np.nanmin(df["avg_temp_c"])), float(np.nanmax(df["avg_temp_c"]))
-            st.query_params.update(temp=f"{max(tmin,5)}:{min(tmax,25)}")
-        if "member_type" in df.columns: st.query_params.update(usertype="member")
-
-with col_p2:
-    if st.button("🌧️ Rainy-day preset"):
-        st.session_state["page_select"] = "Weather vs Bike Usage"
-        if "wet_day" in df.columns: st.query_params.update(wet="1")
-
-# --- reset / share
-r1, r2 = st.sidebar.columns([1,1])
-with r1:
-    if st.button("♻️ Reset all"):
-        st.cache_data.clear()
-        if hasattr(st, "query_params"): st.query_params.clear()
-        st.rerun()
-with r2:
-    if st.button("🔗 Copy current link"):
-        st.sidebar.code(st.experimental_get_query_params() if not hasattr(st,"query_params") else dict(st.query_params))
-        st.caption("The current state is in the URL — copy from your browser bar.")
-
-if not DATA_PATH.exists():
-    st.sidebar.error(f"Missing data: {DATA_PATH}")
-    st.error("Data file not found. Create the ≤25MB sample CSV at data/processed/reduced_citibike_2022.csv.")
-    st.stop()
-
-df = load_data(DATA_PATH, DATA_PATH.stat().st_mtime)
-
-# Sidebar reload button (works on old/new Streamlit)
-if st.sidebar.button("🔄 Reload data"):
-    st.cache_data.clear()
-    if hasattr(st, "rerun"):
-        st.rerun()
-    else:
-        st.experimental_rerun()
-
-# Date range
-date_min = pd.to_datetime(df["date"].min()) if "date" in df.columns else None
-date_max = pd.to_datetime(df["date"].max()) if "date" in df.columns else None
-date_range = st.sidebar.date_input("Date range", value=(date_min, date_max)) if date_min is not None else None
-
-# Season
-seasons_all = ["Winter","Spring","Summer","Autumn"]
-seasons = st.sidebar.multiselect("Season(s)", seasons_all, default=seasons_all) if "season" in df.columns else None
-
-# Member type (pretty labels; raw value for filtering)
-usertype = None
-if "member_type" in df.columns:
-    raw_opts = ["All"] + sorted(df["member_type"].astype(str).unique().tolist())
-    usertype = st.sidebar.selectbox(
-        "User type",
-        raw_opts,
-        format_func=lambda v: "All" if v == "All" else MEMBER_LABELS.get(v, str(v).title())
-    )
-
-# --- Time filters (kept visible) ---
-hour_range = None
-if "hour" in df.columns:
-    hour_range = st.sidebar.slider("Hour of day", 0, 23, (6, 22), key="hour_slider")
-
-# --- Collapsed: less-used filters ---
-temp_range, weekdays = None, None
-with st.sidebar.expander("More filters", expanded=False):
-    # Temperature
-    if "avg_temp_c" in df.columns:
-        tmin = float(np.nanmin(df["avg_temp_c"]))
-        tmax = float(np.nanmax(df["avg_temp_c"]))
-        temp_range = st.slider("Temperature (°C)", tmin, tmax, (tmin, tmax), key="temp_slider")
-
-    # Weekdays
-    if "weekday" in df.columns:
-        weekday_names = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
-        weekdays = st.multiselect("Weekday(s)", weekday_names, default=weekday_names, key="weekday_multi")
-
-st.sidebar.markdown("---")
-
-# ── URL state: read (on load) and write (after filters) ──
+# ---------- Query param helpers (Streamlit ≥1.31 safe) ----------
 def _qp_get():
-    if hasattr(st, "query_params"):  # Streamlit ≥1.31
-        return dict(st.query_params)
-    return st.experimental_get_query_params()
+    return dict(st.query_params) if hasattr(st, "query_params") else st.experimental_get_query_params()
 
 def _qp_set(**kv):
     try:
@@ -1027,6 +948,58 @@ def _qp_set(**kv):
     except Exception:
         pass
 
+def _qp_clear():
+    try:
+        if hasattr(st, "query_params"):
+            st.query_params.clear()
+        else:
+            st.experimental_set_query_params()
+    except Exception:
+        pass
+
+# ---------- Data presence ----------
+if not DATA_PATH.exists():
+    st.sidebar.error(f"Missing data: {DATA_PATH}")
+    st.error("Data file not found. Create the ≤25MB sample CSV at data/processed/reduced_citibike_2022.csv.")
+    st.stop()
+
+# Load
+df = load_data(DATA_PATH, DATA_PATH.stat().st_mtime)
+
+# ---------- Presets (top, to encourage use) ----------
+with st.sidebar.expander("⚡ Quick presets", expanded=False):
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("✨ Commuter preset", key="btn_preset_commuter", help="Weekdays 06–10 & 16–20, mild temps, members"):
+            _qp_set(page="Weekday × Hour Heatmap")
+            if "weekday" in df.columns:
+                _qp_set(weekday="Mon,Tue,Wed,Thu,Fri")
+            if "hour" in df.columns:
+                _qp_set(hour0=6, hour1=20)
+            if "avg_temp_c" in df.columns:
+                tmin, tmax = float(np.nanmin(df["avg_temp_c"])), float(np.nanmax(df["avg_temp_c"]))
+                _qp_set(temp=f"{max(tmin,5)}:{min(tmax,25)}")
+            if "member_type" in df.columns:
+                _qp_set(usertype="member")
+            st.rerun()
+    with c2:
+        if st.button("🌧️ Rainy-day preset", key="btn_preset_rain", help="Focus only on wet days (uses wet_day flag)"):
+            _qp_set(page="Weather vs Bike Usage", wet=1)
+            st.rerun()
+
+# ---------- Actions ----------
+with st.sidebar.expander("🛠 Actions", expanded=False):
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("♻️ Reset filters", key="btn_reset", help="Clear URL state and sidebar selections"):
+            st.cache_data.clear()
+            _qp_clear()
+            st.rerun()
+    with c2:
+        if st.button("🔗 Copy current link", key="btn_copy", help="Your current filters are already reflected in the URL"):
+            st.sidebar.success("URL updated — copy it from your browser bar to share this exact view.")
+
+# ---------- Read URL page seed ----------
 PAGES = [
     "Intro",
     "Weather vs Bike Usage",
@@ -1040,24 +1013,70 @@ PAGES = [
     "Weekday × Hour Heatmap",
     "Recommendations",
 ]
-
-# Seed default page from URL (if present), otherwise first page
 _qp = _qp_get()
-_qp_page = None
-if "page" in _qp:
-    _qp_page = _qp["page"][0] if isinstance(_qp["page"], list) else _qp["page"]
+_qp_page = (_qp.get("page", [None])[0] if isinstance(_qp.get("page"), list) else _qp.get("page")) or PAGES[0]
 if _qp_page not in PAGES:
     _qp_page = PAGES[0]
 
-# The widget value drives the app; we do NOT override it afterwards
-page = st.sidebar.selectbox(
-    "📑 Analysis page",
-    PAGES,
-    index=PAGES.index(_qp_page),
-    key="page_select",
-)
+page = st.sidebar.selectbox("📑 Analysis page", PAGES, index=PAGES.index(_qp_page), key="page_select")
 
-# After filters chosen → write them to URL (safe)
+# ---------- Primary filters ----------
+date_min = pd.to_datetime(df["date"].min()) if "date" in df.columns else None
+date_max = pd.to_datetime(df["date"].max()) if "date" in df.columns else None
+date_range = st.sidebar.date_input(
+    "Date range",
+    value=(date_min, date_max) if (date_min is not None and date_max is not None) else None,
+    help="Filter trips by trip date",
+    key="date_range",
+) if date_min is not None else None
+
+seasons_all = ["Winter","Spring","Summer","Autumn"]
+seasons = st.sidebar.multiselect(
+    "Season(s)",
+    seasons_all,
+    default=seasons_all,
+    help="Pick seasonal subsets",
+    key="season_multi",
+) if "season" in df.columns else None
+
+usertype = None
+if "member_type" in df.columns:
+    raw_opts = ["All"] + sorted(df["member_type"].astype(str).unique().tolist())
+    usertype = st.sidebar.selectbox(
+        "User type",
+        raw_opts,
+        format_func=lambda v: "All" if v == "All" else MEMBER_LABELS.get(v, str(v).title()),
+        help="Filter by rider category",
+        key="usertype_select",
+    )
+
+hour_range = None
+if "hour" in df.columns:
+    hour_range = st.sidebar.slider("Hour of day", 0, 23, (6, 22), help="Trip start hour", key="hour_slider")
+
+# ---------- Advanced filters ----------
+temp_range, weekdays, rainy_only = None, None, False
+with st.sidebar.expander("More filters", expanded=False):
+    # Temperature
+    if "avg_temp_c" in df.columns:
+        tmin = float(np.nanmin(df["avg_temp_c"]))
+        tmax = float(np.nanmax(df["avg_temp_c"]))
+        temp_range = st.slider("Temperature (°C)", tmin, tmax, (tmin, tmax), key="temp_slider", help="Average trip-day temperature")
+
+    # Weekdays
+    if "weekday" in df.columns:
+        weekday_names = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
+        weekdays = st.multiselect("Weekday(s)", weekday_names, default=weekday_names, key="weekday_multi")
+
+    # Rainy day (wired to URL `wet=1`)
+    if "wet_day" in df.columns:
+        qp_wet = _qp.get("wet", ["0"])
+        qp_wet = qp_wet[0] if isinstance(qp_wet, list) else qp_wet
+        rainy_only = st.checkbox("Only rainy days", value=(str(qp_wet) == "1"), key="chk_rainy")
+
+st.sidebar.markdown("---")
+
+# ---------- Write URL state (after widgets resolve) ----------
 try:
     _qp_set(
         page=page,
@@ -1065,12 +1084,13 @@ try:
         date1=str(date_range[1]) if date_range else None,
         usertype=usertype or "All",
         hour0=hour_range[0] if hour_range else None,
-        hour1=hour_range[1] if hour_range else None
+        hour1=hour_range[1] if hour_range else None,
+        wet=1 if rainy_only else 0,
     )
 except Exception:
     pass
 
-# Filtered data
+# ---------- Filtered data ----------
 df_f = apply_filters(
     df,
     (pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])) if date_range else None,
@@ -1081,37 +1101,35 @@ df_f = apply_filters(
     weekdays=weekdays,
 )
 
+# Apply the rainy filter here (apply_filters doesn't handle it)
+if rainy_only and "wet_day" in df_f.columns:
+    df_f = df_f[df_f["wet_day"] == 1]
+
 daily_all = ensure_daily(df)
 daily_f   = ensure_daily(df_f)
 
 st.sidebar.success(f"✅ {len(df_f):,} trips match")
 
-# ---- backfill trip-level weather from daily ----
+# ---------- Backfill trip-level weather from daily (once) ----------
 def _backfill_trip_weather(df_trips: pd.DataFrame, daily_df: pd.DataFrame) -> pd.DataFrame:
+    """Fill missing trip-level weather columns from daily aggregates (by date)."""
     if daily_df is None or daily_df.empty or "date" not in df_trips.columns:
         return df_trips
-
     out = df_trips.copy()
+    out["date"] = pd.to_datetime(out["date"], errors="coerce")
 
-    # build daily lookups only for columns that exist
     lookups = {}
-    for col in ["avg_temp_c", "wind_kph", "gust_kph", "precip_mm", "wet_day", "precip_bin", "wind_bin"]:
+    for col in ["avg_temp_c","wind_kph","gust_kph","precip_mm","wet_day","precip_bin","wind_bin"]:
         if col in daily_df.columns:
             lookups[col] = daily_df.set_index("date")[col]
-
-    # ensure both are datetime (day-level) for mapping
-    out["date"] = pd.to_datetime(out["date"], errors="coerce")
-    # daily_df['date'] is already datetime from ensure_daily()
 
     for col, mapper in lookups.items():
         if col not in out.columns or out[col].notna().sum() == 0:
             if col not in out.columns:
                 out[col] = np.nan
             out[col] = out[col].where(out[col].notna(), out["date"].map(mapper))
-
     return out
 
-# apply backfill once
 df_f = _backfill_trip_weather(df_f, daily_all)
 
 # ────────────────────────────── Pages ──────────────────────────────────────
