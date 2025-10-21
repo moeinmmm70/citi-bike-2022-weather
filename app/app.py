@@ -1573,25 +1573,43 @@ def page_weather_vs_usage(daily_filtered: pd.DataFrame) -> None:
             except Exception:
                 st.info("Install scikit-learn to enable the linear simulator.")
 
-            # Quadratic “comfort” curve + optimum
-            X = np.c_[np.ones(len(d_fit)), d_fit["avg_temp_c"], d_fit["avg_temp_c"]**2]
-            try:
-                beta = np.linalg.lstsq(X, d_fit["bike_rides_daily"], rcond=None)[0]
-                a, b, c = map(float, beta)   # rides ≈ a + b*T + c*T^2
-                t_opt = (-b / (2*c)) if (c not in (0, np.nan) and np.isfinite(c)) else np.nan
+            # ── Quadratic “comfort” curve + robust optimum
+            # Plausible clamp window (intersect with observed range to avoid extrapolation)
+            tmin = max(-5.0, float(d_fit["avg_temp_c"].min()))
+            tmax = min(35.0, float(d_fit["avg_temp_c"].max()))
 
-                if np.isfinite(t_opt):
-                    st.success(f"Estimated **optimal temperature** for demand: **{t_opt:.1f}°C** (quadratic fit)")
+            # 1) Use robust helper to compute constrained vertex
+            T_opt = _optimal_temp_quadratic(
+                d_fit, tcol="avg_temp_c", ycol="bike_rides_daily", tmin=tmin, tmax=tmax
+            )
+
+            # 2) Build a numerically stable quadratic fit (centered) for plotting
+            T = d_fit["avg_temp_c"].to_numpy().astype(float)
+            Y = d_fit["bike_rides_daily"].to_numpy().astype(float)
+            Tm = T.mean()
+            Tc = T - Tm
+            try:
+                a2, a1, a0 = np.polyfit(Tc, Y, 2)  # Y ≈ a2*Tc^2 + a1*Tc + a0
+                # Only show "optimum" if concave
+                if a2 < 0 and T_opt is not None:
+                    st.success(f"Estimated **optimal temperature** for demand: **{T_opt:.1f} °C** (quadratic fit)")
+                else:
+                    st.info("Optimal temperature not reliable for this selection.")
 
                 # Mini visualization
-                t_grid = np.linspace(d_fit["avg_temp_c"].min(), d_fit["avg_temp_c"].max(), 100)
-                y_hat  = a + b*t_grid + c*(t_grid**2)
+                t_grid = np.linspace(tmin, tmax, 120)
+                y_hat = a2*(t_grid - Tm)**2 + a1*(t_grid - Tm) + a0
+
                 figq = go.Figure()
-                figq.add_trace(go.Scatter(x=d_fit["avg_temp_c"], y=d_fit["bike_rides_daily"],
-                                          mode="markers", name="Observed", opacity=0.5))
-                figq.add_trace(go.Scatter(x=t_grid, y=y_hat, mode="lines", name="Quadratic fit"))
-                if np.isfinite(t_opt):
-                    figq.add_vline(x=t_opt, line_dash="dot")
+                figq.add_trace(go.Scatter(
+                    x=T, y=Y, mode="markers", name="Observed", opacity=0.5
+                ))
+                figq.add_trace(go.Scatter(
+                    x=t_grid, y=y_hat, mode="lines", name="Quadratic fit"
+                ))
+                if a2 < 0 and T_opt is not None:
+                    figq.add_vline(x=T_opt, line_dash="dot")
+
                 figq.update_layout(height=380, title="Comfort curve (rides vs temperature)")
                 figq.update_xaxes(title="Avg temp (°C)")
                 figq.update_yaxes(title="Bike rides per day")
@@ -3453,25 +3471,75 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
         wet = d.loc[d["wet_day"] == 1, "bike_rides_daily"].mean()
         return float((wet - dry) / dry * 100.0) if pd.notnull(dry) and dry > 0 else None
 
-    def _temp_elasticity_at_20c(daily: pd.DataFrame | None) -> float | None:
-        """Quadratic fit y = a + bT + cT^2; elasticity ≈ (dy/dT)/y at T=20°C."""
-        if daily is None or daily.empty or not {"avg_temp_c", "bike_rides_daily"}.issubset(daily.columns):
+    def _optimal_temp_quadratic(
+        daily: pd.DataFrame | None,
+        tcol: str = "avg_temp_c",
+        ycol: str = "bike_rides_daily",
+        tmin: float = -5.0,
+        tmax: float = 35.0,
+    ) -> float | None:
+        """
+        Fit y ~ a2*(T - Tm)^2 + a1*(T - Tm) + a0 (centered for stability).
+        Return vertex temp in °C if it is a concave parabola and inside [tmin, tmax];
+        otherwise return None.
+        """
+        if daily is None or daily.empty or not {tcol, ycol}.issubset(daily.columns):
             return None
-        d = daily.dropna(subset=["avg_temp_c", "bike_rides_daily"])
+
+        d = daily[[tcol, ycol]].dropna().copy()
+        # Fit only within plausible riding temps to avoid crazy extrapolations
+        d = d[(d[tcol] >= tmin) & (d[tcol] <= tmax)]
         if len(d) < 20:
             return None
-        X = np.c_[np.ones(len(d)), d["avg_temp_c"], d["avg_temp_c"] ** 2]
+
+        T = d[tcol].to_numpy().astype(float)
+        Y = d[ycol].to_numpy().astype(float)
+
+        # Center T to reduce collinearity and improve numeric stability
+        Tm = T.mean()
+        Tc = T - Tm
+
+        # Quadratic fit: Y ≈ a2*Tc^2 + a1*Tc + a0
+        a2, a1, a0 = np.polyfit(Tc, Y, 2)
+        if a2 >= 0:
+            # Parabola opens upward (minimum) → no meaningful "optimal" maximum
+            return None
+
+        # Vertex in centered coordinate, then uncenter back
+        Tc_opt = -a1 / (2 * a2)
+        T_opt = float(Tc_opt + Tm)
+
+        # Clamp sanity: if outside plausible range, discard
+        if T_opt < tmin or T_opt > tmax:
+            return None
+
+        return T_opt
+
+    def _temp_elasticity_at_20c(daily: pd.DataFrame | None) -> float | None:
+        """
+        Quadratic fit y = a + bT + cT^2; elasticity ≈ (dy/dT)/y at T=20°C, in %/°C.
+        """
+        if daily is None or daily.empty or not {"avg_temp_c", "bike_rides_daily"}.issubset(daily.columns):
+            return None
+        d = daily.dropna(subset=["avg_temp_c", "bike_rides_daily"]).copy()
+        if len(d) < 20:
+            return None
+
+        T = d["avg_temp_c"].to_numpy().astype(float)
+        Y = d["bike_rides_daily"].to_numpy().astype(float)
+
+        # Design matrix for uncentered quadratic
+        X = np.c_[np.ones(len(T)), T, T**2]
         try:
-            a, b, c = np.linalg.lstsq(X, y, rcond=None)[0]
-            if c >= 0:  # curve opens upward -> no meaningful maximum
-                T_opt = np.nan
-            else:
-                T_opt = -b / (2*c)
-                # clamp to realistic riding temperatures
-                if T_opt < -10 or T_opt > 40:
-                    T_opt = np.nan
+            a, b, c = np.linalg.lstsq(X, Y, rcond=None)[0]
+            t = 20.0
+            y_hat = a + b*t + c*t*t
+            dy_dt = b + 2*c*t
+            if y_hat <= 0:
+                return None
+            return float(100.0 * dy_dt / y_hat)
         except Exception:
-            T_opt = np.nan
+            return None
 
     def _top_share(df: pd.DataFrame, col: str, top_k: int = 20) -> float | None:
         if col not in df.columns or df.empty:
