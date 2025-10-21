@@ -3419,7 +3419,7 @@ def page_weekday_hour_heatmap(df_filtered: pd.DataFrame) -> None:
 
     st.caption("Tips: try Row % to see within-day timing; Column % to see which days dominate each hour; Z-score to highlight anomalies.")
 
-# ───────────────────── Page: Recommendations (evidence-driven, polished) ─────────────────────
+# ───────────────────── Page: Recommendations ─────────────────────
 def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame | None) -> None:
     """Opinionated, evidence-driven recommendations + KPIs, auto-derived from the current selection (polished UI)."""
 
@@ -3498,9 +3498,11 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
     share_top20_end = _top_share(df_filtered, "end_station_name", 20)
     peak = _peak_cell(df_filtered)
     imb = _imbalance_table(df_filtered, topk=10)  # grab 10 so pilot has enough
+
     # safe formatting
-    p_start = 0 if share_top20_start is None or np.isnan(share_top20_start) else float(share_top20_start)
-    p_end = 0 if share_top20_end is None or np.isnan(share_top20_end) else float(share_top20_end)
+    p_start = 0.0 if share_top20_start is None or (isinstance(share_top20_start, float) and np.isnan(share_top20_start)) else float(share_top20_start)
+    p_end   = 0.0 if share_top20_end   is None or (isinstance(share_top20_end,   float) and np.isnan(share_top20_end))   else float(share_top20_end)
+    rain_txt = f"{rain_pen:+.0f}%" if rain_pen is not None else "lower"
 
     # ── Styles
     st.markdown(
@@ -3522,8 +3524,6 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
                  border-radius:8px; color:#dbeafe;}
         .risk{border-left:4px solid #f59e0b; padding:10px 12px; background:rgba(245,158,11,.08);
                  border-radius:8px; color:#fde68a;}
-        .ok{color:#86efac;}
-        .warn{color:#fca5a5;}
         </style>
         """,
         unsafe_allow_html=True,
@@ -3538,7 +3538,7 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
     if kpis.get("corr_tr") is not None:
         badges.append(f'<span class="badge">Temp↔Rides r: {kpis["corr_tr"]:+.2f}</span>')
     if rain_pen is not None:
-        badges.append(f'<span class="badge">Rain impact: {rain_pen:+.0f}%</span>')
+        badges.append(f'<span class="badge">Rain impact: {rain_txt}</span>')
     if p_start or p_end:
         badges.append(f'<span class="badge">Top-20 coverage: {p_start:.0f}% / {p_end:.0f}%</span>')
     if badges:
@@ -3563,7 +3563,7 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
     _metric(cols[0], "Total trips", f"{kfmt(kpis.get('total_rides', 0))}", "Scope of evidence")
     _metric(cols[1], "Avg/day", f"{kfmt(kpis.get('avg_day')) if kpis.get('avg_day') else '—'}", "Daily volume")
     _metric(cols[2], "Temp ↔ rides (r)", f"{kpis['corr_tr']:+.3f}" if kpis.get("corr_tr") is not None else "—", "Daily correlation")
-    _metric(cols[3], "Rain penalty", f"{rain_pen:+.0f}%" if rain_pen is not None else "—", "Wet vs dry days")
+    _metric(cols[3], "Rain penalty", rain_txt if rain_pen is not None else "—", "Wet vs dry days")
     _metric(cols[4], "Top-20 share", f"{p_start:.0f}% / {p_end:.0f}%", "Start / End station coverage")
 
     # ── Insight bullets that adapt to data
@@ -3575,8 +3575,7 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
     if p_start >= 60 or p_end >= 60:
         bullets.append("• Demand is **concentrated**: Hot-20 covers most rides — optimize here first.")
     if peak:
-        bullets.append(f"• Peak window: **{peak[0]} {peak[1]}**. Time last replenishment **before** this window.")
-
+        bullets.append(f"• Peak window: **{peak[0]} {peak[1]}**. Time the last replenishment **before** this window.")
     if bullets:
         st.markdown('<div class="callout">', unsafe_allow_html=True)
         st.markdown("**Insights at a glance**  \n" + "\n".join(bullets))
@@ -3585,14 +3584,14 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
     # ── Strategic recommendations (4–8 weeks)
     st.markdown("### 📋 What to do next (4–8 weeks)")
     st.markdown(
-        """
+        f"""
 1) **Morning readiness at hotspot stations**  
    - Target **≥85% fill before AM** at top origins; **≥70% before PM** at top destinations.  
    - Use the Weekday×Hour peak to time the **last pre-peak sweep**.
 
 2) **Weather-aware stocking**  
    - On **mild days (15–25 °C)**, lift dock targets in **AM + PM** windows;  
-     on **wet days**, pre-position trucks near **high-loss stations** and expect demand **{rain} vs dry**.
+     on **wet days**, pre-position trucks near **high-loss stations** and expect demand **{rain_txt} vs dry**.
 
 3) **Corridor-based rebalancing**  
    - Stage trucks near **repeat high-flow endpoints** and run **loop routes** (origin→dest clusters).  
@@ -3605,7 +3604,7 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
 5) **Focus scope (Pareto)**  
    - Maintain a **Hot-20** list covering ~**{p_start:.0f}% of starts / {p_end:.0f}% of ends**;  
      raise service quality here **first**.
-        """.format(rain=(f"{rain_pen:+.0f}%" if rain_pen is not None else "lower"))
+        """
     )
 
     # ── KPI tracker
@@ -3647,8 +3646,10 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
                 "Net departures (needs AM stock / more bikes ready)",
             )
             st.caption("Two-week pilot: last sweep **30–45 min before peak**; monitor KPIs daily.")
-            st.dataframe(pilot[["Station", "in", "out", "Δ (in−out)", "AM target fill", "PM target fill", "Rationale"]],
-                         use_container_width=True)
+            st.dataframe(
+                pilot[["Station", "in", "out", "Δ (in−out)", "AM target fill", "PM target fill", "Rationale"]],
+                use_container_width=True,
+            )
             st.download_button(
                 "Download Hot-20 Pilot (CSV)",
                 pilot.to_csv(index=False).encode("utf-8"),
