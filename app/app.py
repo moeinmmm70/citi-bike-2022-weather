@@ -1221,6 +1221,40 @@ def _backfill_trip_weather(df_trips: pd.DataFrame, daily_df: pd.DataFrame) -> pd
 df_f = _backfill_trip_weather(df_f, daily_all)
 
 # ────────────────────────────── Sidebar forecasting controls ──────────────────────────────
+##### TS base series ####
+# Choose the daily table to model
+d_base = daily_f if (daily_f is not None and not daily_f.empty) else daily_all
+
+if d_base is None or d_base.empty or "date" not in d_base.columns or "bike_rides_daily" not in d_base.columns:
+    st.info("Need a daily table with `date` and `bike_rides_daily` to run forecasting.")
+    st.stop()
+
+# Ensure datetime and sort
+d_base = d_base.copy().sort_values("date")
+if not pd.api.types.is_datetime64_any_dtype(d_base["date"]):
+    d_base["date"] = pd.to_datetime(d_base["date"], errors="coerce")
+
+# Build continuous daily index for rides
+s = (
+    d_base.set_index("date")["bike_rides_daily"]
+         .asfreq("D")
+         .interpolate(limit_direction="both")
+)
+
+# Optional temperature series (for de-weathered model)
+t = None
+for c in ["avg_temp_c", "avgTemp", "t_mean_c", "tmin_c", "tmax_c"]:
+    if c in d_base.columns:
+        t = (
+            d_base.set_index("date")[c]
+                  .asfreq("D")
+                  .interpolate(limit_direction="both")
+        )
+        break
+
+# If temp exists but is all-NaN after alignment, ignore it
+if t is not None and t.isna().all():
+    t = None
 
 try:
     from statsmodels.tsa.statespace.sarimax import SARIMAX
@@ -1240,13 +1274,8 @@ show_last_n = st.sidebar.slider("Plot history window (days)", 60, 365, 180, 10)
 
 model_name = st.sidebar.selectbox(
     "Model",
-    [
-        "Seasonal-Naive (t−7)",
-        "Naive (t−1)",
-        "7-day Moving Average",
-        "SARIMAX (weekly)",
-        "De-weathered + Seasonal-Naive",
-    ],
+    ["Seasonal-Naive (t−7)", "Naive (t−1)", "7-day Moving Average",
+     "SARIMAX (weekly)", "De-weathered + Seasonal-Naive"],
     index=0
 )
 
@@ -1254,14 +1283,12 @@ if model_name == "SARIMAX (weekly)" and not HAS_SARIMAX:
     st.sidebar.warning("`statsmodels` not available — SARIMAX disabled")
 
 if model_name == "De-weathered + Seasonal-Naive" and t is None:
-    st.sidebar.warning("No temperature column found — de-weathered option will fallback to Seasonal-Naive.")
+    st.sidebar.warning("No temperature column found — fallback to Seasonal-Naive.")
 
-# Future weather assumption for de-weathered model
 if model_name == "De-weathered + Seasonal-Naive":
     fut_temp_assume = st.sidebar.selectbox(
         "Future temperature assumption",
-        ["Repeat last 7 days", "Hold last day"],
-        index=0
+        ["Repeat last 7 days", "Hold last day"], index=0
     )
 
 # ────────────────────────────── Sidebar footer / credentials ──────────────────────────────
@@ -3673,15 +3700,28 @@ def page_time_series_forecast(daily_all: pd.DataFrame | None,
         lo, hi = _pi_from_resid(yhat, resid)
         return yhat, lo, hi
 
-    def forecast_seasonal_naive(series: pd.Series, h: int, season: int = 7) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        if len(series) < season:
-            return forecast_naive(series, h)
-        last_season = series.iloc[-season:].to_numpy(dtype=float)
-        reps = int(np.ceil(h / season))
-        yhat = np.tile(last_season, reps)[:h]
-        resid = (series.iloc[-season*10:-season] - series.shift(season).iloc[-season*10:-season]).dropna().to_numpy(dtype=float)
+    def forecast_seasonal_naive(series: pd.Series, h: int, season: int = 7):
+    series = pd.to_numeric(series, errors="coerce").dropna()
+    if len(series) < season:
+        # not enough history → naive
+        yhat = np.full(h, float(series.iloc[-1]))
+        resid = series.diff().dropna().to_numpy(dtype=float)
+        return yhat, * _pi_from_resid(yhat, resid)
+
+    last_season = series.iloc[-season:].to_numpy(dtype=float)
+    # If last season is (near-)constant, don’t mislead—blend to MA level
+    if np.nanmax(last_season) - np.nanmin(last_season) < 1e-6:
+        base = float(series.iloc[-season:].mean())
+        yhat = np.full(h, base)
+        resid = (series - series.rolling(season, min_periods=3).mean()).dropna().to_numpy(dtype=float)
         lo, hi = _pi_from_resid(yhat, resid)
         return yhat, lo, hi
+
+    reps = int(np.ceil(h / season))
+    yhat = np.tile(last_season, reps)[:h]
+    resid = (series.iloc[season:] - series.shift(season).iloc[season:]).dropna().to_numpy(dtype=float)
+    lo, hi = _pi_from_resid(yhat, resid)
+    return yhat, lo, hi
 
     def forecast_ma(series: pd.Series, h: int, k: int = 7) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         base = series.rolling(k, min_periods=max(2, k//2)).mean().iloc[-1]
@@ -3870,15 +3910,37 @@ def page_time_series_forecast(daily_all: pd.DataFrame | None,
         st.dataframe(df_fc.head(10), use_container_width=True)
 
     # ----- Backtest tab -----
-    with tab_bt:
-        st.subheader("Rolling-origin backtest")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            initial = st.number_input("Initial train window (days)", 90, max(365, len(s)-horizon-7), 180, step=7)
-        with c2:
-            step = st.number_input("Step size (days)", 1, 30, 7, step=1)
-        with c3:
-            bt_h = st.number_input("Horizon (days)", 7, 30, min(horizon, 14), step=1)
+   with tab_bt:
+    st.subheader("Rolling-origin backtest")
+
+    # 🧱 Add this block FIRST (safe bounds based on series length)
+    series_len = int(len(s))
+    max_initial = max(30, series_len - max(14, horizon))
+    default_initial = min(180, max_initial)
+    min_initial = 90 if default_initial >= 90 else max(30, int(series_len * 0.4))
+    max_bt_h = max(7, min(30, series_len - default_initial))
+    default_bt_h = min(horizon, max_bt_h)
+
+    # 🧮 Then your Streamlit inputs (reuse these variables)
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        initial = st.number_input(
+            "Initial train window (days)",
+            min_value=int(min_initial),
+            max_value=int(max_initial),
+            value=int(default_initial),
+            step=7
+        )
+    with c2:
+        step = st.number_input("Step size (days)", min_value=1, max_value=30, value=7, step=1)
+    with c3:
+        bt_h = st.number_input(
+            "Horizon (days)",
+            min_value=7,
+            max_value=int(max_bt_h),
+            value=int(default_bt_h),
+            step=1
+        )
 
         def _roll_forecast(series: pd.Series, start: int, h: int, model: str) -> np.ndarray:
             train = series.iloc[:start]
