@@ -3922,8 +3922,16 @@ def page_time_series_forecast(daily_all: pd.DataFrame | None,
             st.metric("MAPE", f"{mape:.1f}%")
 
         err = y_true - y_pred
-        fige = px.histogram(x=err, nbins=30, title="Forecast errors (y_true − y_pred)")
-        fige.update_layout(height=320)
+        fige = px.histogram(x=err, nbins=30)
+        fige.update_layout(
+            height=320,
+            title=None,                 # remove the printed title
+            xaxis_title="Error (y_true − y_pred)",
+            yaxis_title="Count",
+            hovermode="x"
+        )
+        # Optional polish: show zero reference
+        fige.update_xaxes(zeroline=True, zerolinewidth=1)
         st.plotly_chart(fige, use_container_width=True)
 
 # ───────────────────── Page: Recommendations ─────────────────────
