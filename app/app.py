@@ -3419,14 +3419,13 @@ def page_weekday_hour_heatmap(df_filtered: pd.DataFrame) -> None:
 
     st.caption("Tips: try Row % to see within-day timing; Column % to see which days dominate each hour; Z-score to highlight anomalies.")
 
-# ───────────────────── Page: Recommendations (evidence-driven) ─────────────────────
+# ───────────────────── Page: Recommendations (evidence-driven, polished) ─────────────────────
 def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame | None) -> None:
-    """Opinionated, evidence-driven recommendations + KPIs, auto-derived from the current selection."""
-
-    st.header("🚀 Recommendations — evidence from this selection")
+    """Opinionated, evidence-driven recommendations + KPIs, auto-derived from the current selection (polished UI)."""
 
     # ── Guards
     if df_filtered is None or df_filtered.empty:
+        st.header("🚀 Recommendations — evidence from this selection")
         st.info("No data in the current selection. Adjust filters on the left.")
         return
 
@@ -3435,7 +3434,7 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
         if daily is None or daily.empty or "wet_day" not in daily.columns or "bike_rides_daily" not in daily.columns:
             return None
         d = daily.dropna(subset=["wet_day", "bike_rides_daily"])
-        if d.empty or (d["wet_day"]==0).sum()==0:
+        if d.empty or (d["wet_day"] == 0).sum() == 0:
             return None
         dry = d.loc[d["wet_day"] == 0, "bike_rides_daily"].mean()
         wet = d.loc[d["wet_day"] == 1, "bike_rides_daily"].mean()
@@ -3443,17 +3442,17 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
 
     def _temp_elasticity_at_20c(daily: pd.DataFrame | None) -> float | None:
         """Quadratic fit y = a + bT + cT^2; elasticity ≈ (dy/dT)/y at T=20°C."""
-        if daily is None or daily.empty or not {"avg_temp_c","bike_rides_daily"}.issubset(daily.columns):
+        if daily is None or daily.empty or not {"avg_temp_c", "bike_rides_daily"}.issubset(daily.columns):
             return None
-        d = daily.dropna(subset=["avg_temp_c","bike_rides_daily"])
+        d = daily.dropna(subset=["avg_temp_c", "bike_rides_daily"])
         if len(d) < 20:
             return None
-        X = np.c_[np.ones(len(d)), d["avg_temp_c"], d["avg_temp_c"]**2]
+        X = np.c_[np.ones(len(d)), d["avg_temp_c"], d["avg_temp_c"] ** 2]
         try:
             a, b, c = np.linalg.lstsq(X, d["bike_rides_daily"], rcond=None)[0]
             T = 20.0
-            y = a + b*T + c*T*T
-            dy = b + 2*c*T
+            y = a + b * T + c * T * T
+            dy = b + 2 * c * T
             return float((dy / y) * 100.0) if y > 0 else None
         except Exception:
             return None
@@ -3461,8 +3460,7 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
     def _top_share(df: pd.DataFrame, col: str, top_k: int = 20) -> float | None:
         if col not in df.columns or df.empty:
             return None
-        s = df[col].astype(str)
-        counts = s.value_counts()
+        counts = df[col].astype(str).value_counts()
         total = int(counts.sum())
         if total == 0:
             return None
@@ -3474,16 +3472,16 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
         if mat.empty or not np.isfinite(mat.to_numpy()).any():
             return None
         r, c = np.unravel_index(np.nanargmax(mat.values), mat.shape)
-        weekday = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][r]
+        weekday = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][r]
         hour = mat.columns[c]
         return weekday, f"{int(hour):02d}:00"
 
     def _imbalance_table(df: pd.DataFrame, topk: int = 8) -> pd.DataFrame:
-        need = {"start_station_name","end_station_name"}
+        need = {"start_station_name", "end_station_name"}
         if not need.issubset(df.columns):
             return pd.DataFrame()
         g_start = df.groupby("start_station_name").size().rename("out")
-        g_end   = df.groupby("end_station_name").size().rename("in")
+        g_end = df.groupby("end_station_name").size().rename("in")
         m = pd.concat([g_start, g_end], axis=1).fillna(0).astype(int)
         m["Δ (in−out)"] = (m["in"] - m["out"]).astype(int)
         if m.empty:
@@ -3493,92 +3491,139 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
         return pd.concat([hi, lo])
 
     # ── Core evidence
-    kpis = compute_core_kpis(df_filtered, daily_filtered)  # total_rides, avg_day, corr_tr
+    kpis = compute_core_kpis(df_filtered, daily_filtered)  # {total_rides, avg_day, corr_tr}
     rain_pen = _rain_penalty(daily_filtered)
-    temp_el  = _temp_elasticity_at_20c(daily_filtered)
+    temp_el = _temp_elasticity_at_20c(daily_filtered)
     share_top20_start = _top_share(df_filtered, "start_station_name", 20)
-    share_top20_end   = _top_share(df_filtered, "end_station_name", 20)
+    share_top20_end = _top_share(df_filtered, "end_station_name", 20)
     peak = _peak_cell(df_filtered)
-    imb  = _imbalance_table(df_filtered, topk=6)
+    imb = _imbalance_table(df_filtered, topk=10)  # grab 10 so pilot has enough
+    # safe formatting
+    p_start = 0 if share_top20_start is None or np.isnan(share_top20_start) else float(share_top20_start)
+    p_end = 0 if share_top20_end is None or np.isnan(share_top20_end) else float(share_top20_end)
 
-    # ── Hero summary
+    # ── Styles
     st.markdown(
         """
         <style>
-        .rec-grid {display:grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap:12px;}
-        .rec-card {background:linear-gradient(180deg, rgba(25,31,40,.80), rgba(16,21,29,.86));
-                   border:1px solid rgba(255,255,255,.08); border-radius:18px; padding:14px 16px;}
+        .hero{
+          background: radial-gradient(1000px 300px at 10% -20%, rgba(56, 189, 248,.18), transparent),
+                      radial-gradient(1000px 300px at 110% -40%, rgba(99,102,241,.14), transparent);
+          border:1px solid rgba(255,255,255,.08); border-radius:18px; padding:18px 18px; margin-bottom:12px;
+        }
+        .badge{display:inline-block; padding:4px 8px; border-radius:999px; font-size:.78rem;
+               border:1px solid rgba(255,255,255,.16); color:#e5e7eb; background:rgba(255,255,255,.05); margin-right:6px;}
+        .rec-card {background:linear-gradient(180deg, rgba(25,31,40,.82), rgba(16,21,29,.90));
+                   border:1px solid rgba(255,255,255,.10); border-radius:16px; padding:14px 16px;}
         .rec-title{color:#cbd5e1; font-size:.90rem;}
-        .rec-val  {color:#f8fafc; font-weight:800; font-size:1.2rem; margin-top:2px;}
+        .rec-val  {color:#f8fafc; font-weight:800; font-size:1.18rem; margin-top:2px;}
         .rec-sub  {color:#94a3b8; font-size:.80rem; margin-top:2px;}
+        .callout{border-left:4px solid #60a5fa; padding:10px 12px; background:rgba(59,130,246,.08);
+                 border-radius:8px; color:#dbeafe;}
+        .risk{border-left:4px solid #f59e0b; padding:10px 12px; background:rgba(245,158,11,.08);
+                 border-radius:8px; color:#fde68a;}
+        .ok{color:#86efac;}
+        .warn{color:#fca5a5;}
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-    c = st.container()
-    with c:
-        st.markdown("#### Executive summary (current selection)")
-        cols = st.columns(5)
-        def _metric(col, title, val, sub=""):
-            with col:
-                st.markdown(f"""<div class="rec-card">
+    # ── Hero
+    st.markdown('<div class="hero">', unsafe_allow_html=True)
+    st.subheader("🚀 Recommendations — evidence from this selection")
+    badges = []
+    if peak:
+        badges.append(f'<span class="badge">Peak: {peak[0]} {peak[1]}</span>')
+    if kpis.get("corr_tr") is not None:
+        badges.append(f'<span class="badge">Temp↔Rides r: {kpis["corr_tr"]:+.2f}</span>')
+    if rain_pen is not None:
+        badges.append(f'<span class="badge">Rain impact: {rain_pen:+.0f}%</span>')
+    if p_start or p_end:
+        badges.append(f'<span class="badge">Top-20 coverage: {p_start:.0f}% / {p_end:.0f}%</span>')
+    if badges:
+        st.markdown(" ".join(badges), unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Executive summary cards
+    st.markdown("#### Executive summary (current selection)")
+    cols = st.columns(5)
+
+    def _metric(col, title, val, sub=""):
+        with col:
+            st.markdown(
+                f"""<div class="rec-card">
                     <div class="rec-title">{title}</div>
                     <div class="rec-val">{val}</div>
                     <div class="rec-sub">{sub}</div>
-                </div>""", unsafe_allow_html=True)
+                </div>""",
+                unsafe_allow_html=True,
+            )
 
-        _metric(cols[0], "Total trips", f"{kfmt(kpis.get('total_rides', 0))}", "Scope of evidence")
-        _metric(cols[1], "Avg/day", f"{kfmt(kpis.get('avg_day')) if kpis.get('avg_day') else '—'}", "Daily volume")
-        _metric(cols[2], "Temp ↔ rides (r)", f"{kpis['corr_tr']:+.3f}" if kpis.get("corr_tr") is not None else "—", "Daily correlation")
-        _metric(cols[3], "Rain penalty", f"{rain_pen:+.0f}%" if rain_pen is not None else "—", "Wet vs dry days")
-        _metric(cols[4], "Top-20 share", 
-                f"{(share_top20_start or 0):.0f}% / {(share_top20_end or 0):.0f}%", 
-                "Start / End station coverage")
+    _metric(cols[0], "Total trips", f"{kfmt(kpis.get('total_rides', 0))}", "Scope of evidence")
+    _metric(cols[1], "Avg/day", f"{kfmt(kpis.get('avg_day')) if kpis.get('avg_day') else '—'}", "Daily volume")
+    _metric(cols[2], "Temp ↔ rides (r)", f"{kpis['corr_tr']:+.3f}" if kpis.get("corr_tr") is not None else "—", "Daily correlation")
+    _metric(cols[3], "Rain penalty", f"{rain_pen:+.0f}%" if rain_pen is not None else "—", "Wet vs dry days")
+    _metric(cols[4], "Top-20 share", f"{p_start:.0f}% / {p_end:.0f}%", "Start / End station coverage")
 
-        if peak:
-            st.caption(f"Peak window (by trips): **{peak[0]} {peak[1]}**")
+    # ── Insight bullets that adapt to data
+    bullets = []
+    if kpis.get("corr_tr") is not None and abs(kpis["corr_tr"]) >= 0.30:
+        bullets.append("• Temperature is a **material driver** of demand in this selection.")
+    if rain_pen is not None and rain_pen <= -5:
+        bullets.append("• **Wet days depress rides** — plan pre-positioning and recovery sweeps.")
+    if p_start >= 60 or p_end >= 60:
+        bullets.append("• Demand is **concentrated**: Hot-20 covers most rides — optimize here first.")
+    if peak:
+        bullets.append(f"• Peak window: **{peak[0]} {peak[1]}**. Time last replenishment **before** this window.")
+
+    if bullets:
+        st.markdown('<div class="callout">', unsafe_allow_html=True)
+        st.markdown("**Insights at a glance**  \n" + "\n".join(bullets))
+        st.markdown("</div>", unsafe_allow_html=True)
 
     # ── Strategic recommendations (4–8 weeks)
     st.markdown("### 📋 What to do next (4–8 weeks)")
     st.markdown(
         """
 1) **Morning readiness at hotspot stations**  
-   - Target **≥85% fill before AM commute** at the top origins; hold **≥70% before PM** at top destinations.  
-   - Use the Weekday×Hour peak to time the last pre-peak sweep.
+   - Target **≥85% fill before AM** at top origins; **≥70% before PM** at top destinations.  
+   - Use the Weekday×Hour peak to time the **last pre-peak sweep**.
 
 2) **Weather-aware stocking**  
-   - On **mild days (15–25 °C)**, lift dock targets in the **AM+PM windows**;  
-     on **wet days**, pre-position trucks near high-loss stations and expect demand **{rain} vs dry**.
+   - On **mild days (15–25 °C)**, lift dock targets in **AM + PM** windows;  
+     on **wet days**, pre-position trucks near **high-loss stations** and expect demand **{rain} vs dry**.
 
 3) **Corridor-based rebalancing**  
-   - Stage trucks by **repeat high-flow endpoints** and run **loop routes** (origin→dest clusters).  
+   - Stage trucks near **repeat high-flow endpoints** and run **loop routes** (origin→dest clusters).  
    - Prioritize stations with the **largest |Δ (in−out)|** below.
 
 4) **Rider nudges**  
-   - **Credits** for returns to under-stocked docks during commute windows.  
-   - In-app banners only when **dock-out risk** > threshold in the next 60–90 minutes.
+   - Offer **credits** for returns to **under-stocked docks** during commute windows.  
+   - Show in-app banners only when **dock-out risk** exceeds threshold within **60–90 min**.
 
 5) **Focus scope (Pareto)**  
-   - Operate a **Hot-20** list that covers ~**{p_start}% of starts / {p_end}% of ends**;  
-     aim to lift service quality here first.
-        """.format(
-            rain=(f"{rain_pen:+.0f}%" if rain_pen is not None else "lower"),
-            p_start=f"{(share_top20_start or 0):.0f}",
-            p_end=f"{(share_top20_end or 0):.0f}",
-        )
+   - Maintain a **Hot-20** list covering ~**{p_start:.0f}% of starts / {p_end:.0f}% of ends**;  
+     raise service quality here **first**.
+        """.format(rain=(f"{rain_pen:+.0f}%" if rain_pen is not None else "lower"))
     )
 
-    # ── KPI tracker (live targets you can screenshot)
+    # ── KPI tracker
     st.markdown("### 🎯 KPIs to track")
     k1, k2, k3, k4 = st.columns(4)
-    with k1: st.metric("Dock-out rate @ peaks (Hot-20)", "< 5%")
-    with k2: st.metric("Empty/Full complaints (MoM)", "−30%")
-    with k3: st.metric("Truck km / rebalanced bike", "−15%")
-    with k4: st.metric("On-time dock readiness", "≥ 90%")
+    with k1:
+        st.metric("Dock-out rate @ peaks (Hot-20)", "< 5%")
+    with k2:
+        st.metric("Empty/Full complaints (MoM)", "−30%")
+    with k3:
+        st.metric("Truck km / rebalanced bike", "−15%")
+    with k4:
+        st.metric("On-time dock readiness", "≥ 90%")
 
     # ── Evidence snapshots
-    tab1, tab2, tab3 = st.tabs(["🧭 Imbalance focus", "📈 Trend (rides vs temp)", "📦 Download evidence"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🧭 Imbalance focus", "🚚 Hot-20 Pilot Plan", "📈 Trend (rides vs temp)", "📦 Download evidence"])
+
+    # Imbalance focus
     with tab1:
         if not imb.empty:
             show = imb.reset_index().rename(columns={"index": "Station"}).copy()
@@ -3587,59 +3632,118 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
         else:
             st.info("Need start/end station names to compute imbalance.")
 
+    # Pilot Plan (auto-generated)
     with tab2:
-        if daily_filtered is not None and not daily_filtered.empty and {"date","bike_rides_daily"}.issubset(daily_filtered.columns):
+        if not imb.empty:
+            # pick top 10 by absolute imbalance for the pilot
+            pilot = imb.reindex(imb["Δ (in−out)"].abs().sort_values(ascending=False).head(10).index).reset_index()
+            pilot = pilot.rename(columns={"index": "Station"})
+            # naive AM/PM targets (keep simple + transparent)
+            pilot["AM target fill"] = 85
+            pilot["PM target fill"] = 70
+            pilot["Rationale"] = np.where(
+                pilot["Δ (in−out)"] >= 0,
+                "Net arrivals (needs PM relief / more docks free)",
+                "Net departures (needs AM stock / more bikes ready)",
+            )
+            st.caption("Two-week pilot: last sweep **30–45 min before peak**; monitor KPIs daily.")
+            st.dataframe(pilot[["Station", "in", "out", "Δ (in−out)", "AM target fill", "PM target fill", "Rationale"]],
+                         use_container_width=True)
+            st.download_button(
+                "Download Hot-20 Pilot (CSV)",
+                pilot.to_csv(index=False).encode("utf-8"),
+                "hot20_pilot_plan.csv",
+                "text/csv",
+            )
+        else:
+            st.info("Pilot requires station in/out data (start & end station names).")
+
+    # Trend tab
+    with tab3:
+        if daily_filtered is not None and not daily_filtered.empty and {"date", "bike_rides_daily"}.issubset(daily_filtered.columns):
             d = daily_filtered.sort_values("date").copy()
             n = 14
             for col in ["bike_rides_daily", "avg_temp_c"]:
                 if col in d.columns:
-                    d[f"{col}_roll"] = d[col].rolling(n, min_periods=max(2, n//2), center=True).mean()
+                    d[f"{col}_roll"] = d[col].rolling(n, min_periods=max(2, n // 2), center=True).mean()
 
             fig = make_subplots(specs=[[{"secondary_y": True}]])
-            fig.add_trace(go.Scatter(x=d["date"], y=d.get("bike_rides_daily_roll", d["bike_rides_daily"]),
-                                     name="Daily rides", mode="lines", line=dict(width=2)), secondary_y=False)
+            fig.add_trace(
+                go.Scatter(
+                    x=d["date"],
+                    y=d.get("bike_rides_daily_roll", d["bike_rides_daily"]),
+                    name="Daily rides",
+                    mode="lines",
+                    line=dict(width=2),
+                ),
+                secondary_y=False,
+            )
             if "avg_temp_c" in d.columns:
-                fig.add_trace(go.Scatter(x=d["date"], y=d.get("avg_temp_c_roll", d["avg_temp_c"]),
-                                         name="Avg temp (°C)", mode="lines", line=dict(width=2, dash="dot"), opacity=0.9),
-                              secondary_y=True)
-            fig.update_layout(height=340, margin=dict(l=10,r=10,t=30,b=10), hovermode="x unified",
-                              title="Trend overview (14-day smoother)")
+                fig.add_trace(
+                    go.Scatter(
+                        x=d["date"],
+                        y=d.get("avg_temp_c_roll", d["avg_temp_c"]),
+                        name="Avg temp (°C)",
+                        mode="lines",
+                        line=dict(width=2, dash="dot"),
+                        opacity=0.9,
+                    ),
+                    secondary_y=True,
+                )
+            fig.update_layout(
+                height=340,
+                margin=dict(l=10, r=10, t=30, b=10),
+                hovermode="x unified",
+                title="Trend overview (14-day smoother)",
+            )
             fig.update_yaxes(title_text="Rides", secondary_y=False)
             fig.update_yaxes(title_text="Temp (°C)", secondary_y=True)
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Daily table not available for trend (need `date` → daily aggregation).")
 
-    with tab3:
-        # small CSVs so stakeholders can lift evidence straight into slides
+    # Downloads
+    with tab4:
         # Imbalance CSV
         if not imb.empty:
             st.download_button(
                 "Download imbalance stations (CSV)",
                 imb.reset_index().to_csv(index=False).encode("utf-8"),
-                "imbalance_focus.csv", "text/csv"
+                "imbalance_focus.csv",
+                "text/csv",
             )
-        # Peak window + summary as a one-row CSV
+        # Summary CSV
         summary = {
             "total_trips": [kpis.get("total_rides", 0)],
             "avg_per_day": [kpis.get("avg_day") if kpis.get("avg_day") is not None else np.nan],
             "corr_temp_rides": [kpis.get("corr_tr") if kpis.get("corr_tr") is not None else np.nan],
             "rain_penalty_pct": [rain_pen if rain_pen is not None else np.nan],
             "temp_elasticity_20c_pct_per_c": [temp_el if temp_el is not None else np.nan],
-            "top20_share_start_pct": [share_top20_start if share_top20_start is not None else np.nan],
-            "top20_share_end_pct": [share_top20_end if share_top20_end is not None else np.nan],
+            "top20_share_start_pct": [p_start if p_start is not None else np.nan],
+            "top20_share_end_pct": [p_end if p_end is not None else np.nan],
             "peak_weekday": [peak[0] if peak else ""],
             "peak_hour": [peak[1] if peak else ""],
         }
         csv = pd.DataFrame(summary).to_csv(index=False).encode("utf-8")
         st.download_button("Download summary (CSV)", csv, "recommendations_summary.csv", "text/csv")
 
-    # Supporting media
-    with st.expander("CitiBike Experience!"):
+    # ── Risk flags & assumptions (brief, stakeholder-friendly)
+    risk_msgs = []
+    if daily_filtered is None or daily_filtered.empty or "avg_temp_c" not in (daily_filtered.columns if daily_filtered is not None else []):
+        risk_msgs.append("No daily temperature series in this selection (trend elasticity unavailable).")
+    if kpis.get("total_rides", 0) < 5000:
+        risk_msgs.append("Thin sample size; station metrics may be noisy.")
+    if risk_msgs:
+        st.markdown('<div class="risk">', unsafe_allow_html=True)
+        st.markdown("**Risk flags & assumptions**  \n" + "\n".join([f"- {m}" for m in risk_msgs]))
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # Supporting media (keep optional & tucked away)
+    with st.expander("CitiBike experience"):
         st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
-        
-    # ── Closing note
-    st.caption("Built from the current selection — adjust filters to regenerate the plan.")
+
+    # Closing
+    st.caption("Built from the current selection — share this view via the URL to reproduce the plan.")
 
 # ────────────────────────────── Page routing (place this after defining all page_* functions) ─────────────────────────────────────
 
