@@ -4140,15 +4140,28 @@ def page_recommendations(df_filtered: pd.DataFrame | None,
 
     # make _make_heat_grid optional for this page
     _make_heat_grid_fn = globals().get("_make_heat_grid", None)
-    
+
+    # ── Cache heavy computations (to speed up repeated reruns)
+    @st.cache_data(show_spinner=False)
+    def cached_compute_kpis(df_filtered, daily_filtered):
+        return compute_core_kpis(df_filtered, daily_filtered)
+
+    @st.cache_data(show_spinner=False)
+    def cached_rain_penalty(daily):
+        return _rain_penalty_fn(daily)
+
+    @st.cache_data(show_spinner=False)
+    def cached_imbalance(df, topk=10):
+        return _imbalance_table(df, topk)
+        
     # ── Core evidence
-    kpis = compute_core_kpis(df_filtered, daily_filtered)  # expects at least {total_rides, avg_day, corr_tr}
-    rain_pen = _rain_penalty_fn(daily_filtered)
-    temp_el  = _temp_elasticity_at_20c(daily_filtered)
+    kpis = cached_compute_kpis(df_filtered, daily_filtered)
+    rain_pen = cached_rain_penalty(daily_filtered)
+    temp_el  = _temp_elasticity_at_20c(daily_filtered)  # keep this one inline (light)
     share_top20_start = _top_share(df_filtered, "start_station_name", 20)
     share_top20_end   = _top_share(df_filtered, "end_station_name", 20)
     peak = _peak_cell(df_filtered)
-    imb  = _imbalance_table(df_filtered, topk=10)  # 10 for pilot plan
+    imb  = cached_imbalance(df_filtered, topk=10)
 
     # Safe formatting
     p_start = float(share_top20_start) if (share_top20_start is not None and not np.isnan(share_top20_start)) else 0.0
