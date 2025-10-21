@@ -1671,400 +1671,345 @@ def page_weather_vs_usage(daily_filtered: pd.DataFrame) -> None:
             with st.expander("Model drivers (top |β|)"):
                 st.write(coefs.sort_values(key=np.abs, ascending=False).head(10).round(3))
 
-# --- Page routing (place this after defining all page_* functions) ---
 
-if page == "Intro":
-    page_intro(
-        df_filtered=df_f,
-        daily_filtered=daily_f,
-        date_range=date_range,
-        seasons=seasons,
-        usertype=usertype,
-        hour_range=hour_range,
-        cover_path=cover_path,
+# ────────────────────────────── Page: Trip Metrics ──────────────────────────────
+
+def _hist(df: pd.DataFrame, col: str, log_x: bool, robust: bool, nbins: int = 60, title: str | None = None):
+    """Render a robust histogram for a single numeric column."""
+    s = pd.to_numeric(df[col], errors="coerce").dropna()
+    ql, qh = (s.quantile(0.01), s.quantile(0.995)) if len(s) else (None, None)
+    fig = px.histogram(
+        s, x=col, nbins=nbins,
+        labels={col: col.replace("_", " ").title()},
+        log_x=log_x,
+        range_x=[float(ql), float(qh)] if robust and not log_x and np.isfinite(ql) and np.isfinite(qh) else None,
     )
+    if title:
+        fig.update_layout(title=title)
+    fig.update_layout(height=420, margin=dict(l=10, r=10, t=40, b=10))
+    st.plotly_chart(fig, use_container_width=True)
 
-elif page == "Weather vs Bike Usage":
-    page_weather_vs_usage(daily_f)
+
+def _add_linear_fit(fig, x_vals, y_vals, name: str = "Linear fit"):
+    """Add a simple OLS line to an existing scatter."""
+    x = pd.to_numeric(x_vals, errors="coerce")
+    y = pd.to_numeric(y_vals, errors="coerce")
+    ok = x.notna() & y.notna()
+    if ok.sum() >= 3 and x[ok].nunique() >= 2:
+        a, b = np.polyfit(x[ok], y[ok], 1)
+        xs = np.linspace(x[ok].min(), x[ok].max(), 100)
+        ys = a * xs + b
+        fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name=name, line=dict(dash="dash")))
 
 
-elif page == "Trip Metrics (Duration • Distance • Speed)":
+def page_trip_metrics(df_filtered: pd.DataFrame) -> None:
+    """Distributions and relationships for duration, distance, speed."""
     st.header("🚴 Trip metrics")
 
-    need = {"duration_min","distance_km","speed_kmh"}
-    if not need.issubset(df_f.columns):
+    needed = {"duration_min", "distance_km", "speed_kmh"}
+    if df_filtered is None or df_filtered.empty or not needed.issubset(df_filtered.columns):
         st.info("Need duration, distance, and speed (engineered in load_data).")
-    else:
-        # ── Controls
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            robust = st.checkbox("Robust clipping (99.5%)", value=True, help="Hide extreme outliers that crush the axes.")
-        with c2:
-            log_duration = st.checkbox("Log X: Duration", value=False)
-        with c3:
-            log_distance = st.checkbox("Log X: Distance", value=False)
-        with c4:
-            log_speed = st.checkbox("Log X: Speed", value=False)
+        return
 
-        # ── Inlier masks + physical bounds
-        m_dur = (inlier_mask(df_f, "duration_min", hi=0.995) if robust else pd.Series(True, index=df_f.index)) & \
-                df_f["duration_min"].between(0.5, 240, inclusive="both")
-        m_dst = (inlier_mask(df_f, "distance_km", hi=0.995) if robust else pd.Series(True, index=df_f.index)) & \
-                df_f["distance_km"].between(0.01, 30, inclusive="both")
-        m_spd = (inlier_mask(df_f, "speed_kmh", hi=0.995) if robust else pd.Series(True, index=df_f.index)) & \
-                df_f["speed_kmh"].between(0.5, 60, inclusive="both")
+    # ── Controls
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        robust = st.checkbox("Robust clipping (99.5%)", value=True, help="Hide extreme outliers that crush the axes.")
+    with c2:
+        log_duration = st.checkbox("Log X: Duration", value=False)
+    with c3:
+        log_distance = st.checkbox("Log X: Distance", value=False)
+    with c4:
+        log_speed = st.checkbox("Log X: Speed", value=False)
 
-        clipped_dur = int((~m_dur).sum()); clipped_dst = int((~m_dst).sum()); clipped_spd = int((~m_spd).sum())
+    # ── Inlier masks + physical bounds
+    m_dur = (inlier_mask(df_filtered, "duration_min", hi=0.995) if robust else pd.Series(True, index=df_filtered.index)) & \
+            df_filtered["duration_min"].between(0.5, 240, inclusive="both")
+    m_dst = (inlier_mask(df_filtered, "distance_km", hi=0.995) if robust else pd.Series(True, index=df_filtered.index)) & \
+            df_filtered["distance_km"].between(0.01, 30, inclusive="both")
+    m_spd = (inlier_mask(df_filtered, "speed_kmh", hi=0.995) if robust else pd.Series(True, index=df_filtered.index)) & \
+            df_filtered["speed_kmh"].between(0.5, 60, inclusive="both")
 
-        # ===== Histograms (robust) =====
-        cA, cB, cC = st.columns(3)
-        with cA:
-            d = df_f.loc[m_dur, "duration_min"]
-            ql, qh = d.quantile([0.01, 0.995]).tolist()
-            fig = px.histogram(
-                d, x="duration_min", nbins=60, labels={"duration_min":"Duration (min)"},
-                log_x=log_duration, range_x=[ql, qh] if robust and not log_duration else None
-            )
-            fig.update_layout(height=420)
-            st.plotly_chart(fig, use_container_width=True)
-            st.caption(f"Clipped rows (duration): {clipped_dur:,}")
+    clipped_dur = int((~m_dur).sum()); clipped_dst = int((~m_dst).sum()); clipped_spd = int((~m_spd).sum())
 
-        with cB:
-            d = df_f.loc[m_dst, "distance_km"]
-            ql, qh = d.quantile([0.01, 0.995]).tolist()
-            fig = px.histogram(
-                d, x="distance_km", nbins=60, labels={"distance_km":"Distance (km)"},
-                log_x=log_distance, range_x=[ql, qh] if robust and not log_distance else None
-            )
-            fig.update_layout(height=420)
-            st.plotly_chart(fig, use_container_width=True)
-            st.caption(f"Clipped rows (distance): {clipped_dst:,}")
+    # ===== Histograms =====
+    cA, cB, cC = st.columns(3)
+    with cA:
+        _hist(df_filtered.loc[m_dur], "duration_min", log_duration, robust, title="Duration (min)")
+        st.caption(f"Clipped rows (duration): {clipped_dur:,}")
+    with cB:
+        _hist(df_filtered.loc[m_dst], "distance_km", log_distance, robust, title="Distance (km)")
+        st.caption(f"Clipped rows (distance): {clipped_dst:,}")
+    with cC:
+        _hist(df_filtered.loc[m_spd], "speed_kmh", log_speed, robust, title="Speed (km/h)")
+        st.caption(f"Clipped rows (speed): {clipped_spd:,}")
 
-        with cC:
-            d = df_f.loc[m_spd, "speed_kmh"]
-            ql, qh = d.quantile([0.01, 0.995]).tolist()
-            fig = px.histogram(
-                d, x="speed_kmh", nbins=60, labels={"speed_kmh":"Speed (km/h)"},
-                log_x=log_speed, range_x=[ql, qh] if robust and not log_speed else None
-            )
-            fig.update_layout(height=420)
-            st.plotly_chart(fig, use_container_width=True)
-            st.caption(f"Clipped rows (speed): {clipped_spd:,}")
+    # ===== Distance vs duration — operating envelope =====
+    st.subheader("Distance vs duration — feasibility & operating envelope")
+    cols_needed = ["distance_km", "duration_min", "speed_kmh"]
+    inliers_mask_all = m_dst & m_dur & m_spd
+    inliers = df_filtered.loc[inliers_mask_all, cols_needed].copy()
 
-        # ===== Distance vs duration — operating envelope (JSON-safe Scattergl) =====
-        st.subheader("Distance vs duration — feasibility & operating envelope")
+    # Sanitize numerics
+    for c in cols_needed:
+        inliers[c] = pd.to_numeric(inliers[c], errors="coerce")
+    inliers.replace([np.inf, -np.inf], np.nan, inplace=True)
+    inliers.dropna(subset=cols_needed, inplace=True)
 
-        inliers_mask_all = m_dst & m_dur & m_spd
-        cols_needed = ["distance_km", "duration_min", "speed_kmh"]
-        inliers = df_f.loc[inliers_mask_all, cols_needed].copy()
+    nmax = 35_000
+    if len(inliers) > nmax:
+        inliers = inliers.sample(n=nmax, random_state=13)
 
-        # Sanitize numerics
-        for cnum in cols_needed:
-            inliers[cnum] = pd.to_numeric(inliers[cnum], errors="coerce")
-        inliers.replace([np.inf, -np.inf], np.nan, inplace=True)
-        inliers.dropna(subset=cols_needed, inplace=True)
+    x_vals = inliers["distance_km"].astype(float).tolist()
+    y_vals = inliers["duration_min"].astype(float).tolist()
+    c_vals = inliers["speed_kmh"].astype(float).tolist()
 
-        nmax = 35000
-        if len(inliers) > nmax:
-            inliers = inliers.sample(n=nmax, random_state=13)
+    fig2 = go.Figure()
+    fig2.add_trace(
+        go.Scattergl(
+            x=x_vals, y=y_vals, mode="markers", name="Trips",
+            marker=dict(size=6, opacity=0.85, color=c_vals, colorscale="Viridis", showscale=True,
+                        colorbar=dict(title="Speed (km/h)")),
+            hovertemplate="Distance: %{x:.2f} km<br>Duration: %{y:.1f} min<br>Speed: %{marker.color:.1f} km/h<extra></extra>",
+        )
+    )
 
-        # Plain Python lists → avoids JSON dtype traps
-        x_vals = inliers["distance_km"].astype(float).tolist()
-        y_vals = inliers["duration_min"].astype(float).tolist()
-        c_vals = inliers["speed_kmh"].astype(float).tolist()
-
-        fig2 = go.Figure()
-
-        # Main cloud (WebGL)
+    # Faint outliers
+    outliers = df_filtered.loc[~inliers_mask_all, ["distance_km", "duration_min"]].copy()
+    for c in ["distance_km", "duration_min"]:
+        outliers[c] = pd.to_numeric(outliers[c], errors="coerce")
+    outliers.replace([np.inf, -np.inf], np.nan, inplace=True)
+    outliers.dropna(inplace=True)
+    if len(outliers):
         fig2.add_trace(
             go.Scattergl(
-                x=x_vals,
-                y=y_vals,
-                mode="markers",
-                name="Trips",
-                marker=dict(
-                    size=6,
-                    opacity=0.85,
-                    color=c_vals,
-                    colorscale="Viridis",
-                    showscale=True,
-                    colorbar=dict(title="Speed (km/h)")
-                ),
-                hovertemplate=(
-                    "Distance: %{x:.2f} km<br>"
-                    "Duration: %{y:.1f} min<br>"
-                    "Speed: %{marker.color:.1f} km/h"
-                    "<extra></extra>"
-                ),
+                x=outliers["distance_km"].astype(float).tolist(),
+                y=outliers["duration_min"].astype(float).tolist(),
+                mode="markers", name="Outliers", marker=dict(size=5), opacity=0.12, hoverinfo="skip",
             )
         )
 
-        # Faint outliers (fully sanitized too)
-        outliers = df_f.loc[~inliers_mask_all, ["distance_km", "duration_min"]].copy()
-        for cnum in ["distance_km", "duration_min"]:
-            outliers[cnum] = pd.to_numeric(outliers[cnum], errors="coerce")
-        outliers.replace([np.inf, -np.inf], np.nan, inplace=True)
-        outliers.dropna(subset=["distance_km", "duration_min"], inplace=True)
-        if len(outliers):
-            fig2.add_trace(
-                go.Scattergl(
-                    x=outliers["distance_km"].astype(float).tolist(),
-                    y=outliers["duration_min"].astype(float).tolist(),
-                    mode="markers",
-                    name="Outliers",
-                    marker=dict(size=5),
-                    opacity=0.12,
-                    hoverinfo="skip",
-                )
+    # Constant-speed guides
+    if len(inliers):
+        x_min = max(0.01, float(np.nanmin(inliers["distance_km"])))
+        x_max = max(x_min + 0.5, float(np.nanmax(inliers["distance_km"])))
+        xs = np.linspace(x_min, x_max, 200).astype(float).tolist()
+        for v in [10.0, 20.0, 30.0]:
+            ys = [(x / v) * 60.0 for x in xs]
+            fig2.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name=f"{int(v)} km/h guide",
+                                      line=dict(dash="dot", width=1), hoverinfo="skip"))
+        # Tight axes (robust quantiles)
+        xql, xqh = inliers["distance_km"].quantile([0.01, 0.995]).tolist()
+        yql, yqh = inliers["duration_min"].quantile([0.01, 0.995]).tolist()
+        if np.isfinite(xql) and np.isfinite(xqh) and xql < xqh:
+            fig2.update_xaxes(range=[float(xql), float(xqh)])
+        if np.isfinite(yql) and np.isfinite(yqh) and yql < yqh:
+            fig2.update_yaxes(range=[float(yql), float(yqh)])
+
+    fig2.update_layout(
+        height=560, title="Trip operating envelope",
+        xaxis_title="Distance (km)", yaxis_title="Duration (min)",
+        margin=dict(l=20, r=20, t=60, b=30),
+    )
+    st.plotly_chart(fig2, use_container_width=True)
+
+    # ===== Weather relationships =====
+    st.subheader("Weather relationships")
+    c1, c2 = st.columns(2)
+    temp_ok = ("avg_temp_c" in df_filtered.columns) and df_filtered["avg_temp_c"].notna().any()
+    wind_ok = ("wind_kph" in df_filtered.columns) and df_filtered["wind_kph"].notna().any()
+
+    # Speed vs temperature
+    with c1:
+        if temp_ok:
+            dat = df_filtered[m_spd & df_filtered["avg_temp_c"].notna()]
+            if len(dat) > 30_000:
+                dat = dat.sample(n=30_000, random_state=4)
+            figt = px.scatter(
+                dat, x="avg_temp_c", y="speed_kmh", opacity=0.7,
+                labels={"avg_temp_c": "Avg temperature (°C)", "speed_kmh": "Speed (km/h)"},
             )
-
-        # Feasibility guides: constant-speed lines (10/20/30 km/h)
-        if len(inliers):
-            x_min = max(0.01, float(np.nanmin(inliers["distance_km"])))
-            x_max = max(x_min + 0.5, float(np.nanmax(inliers["distance_km"])))
-            xs = np.linspace(x_min, x_max, 200).astype(float).tolist()
-            for v in [10.0, 20.0, 30.0]:
-                ys = [(x / v) * 60.0 for x in xs]
-                fig2.add_trace(
-                    go.Scatter(
-                        x=xs, y=ys, mode="lines", name=f"{int(v)} km/h guide",
-                        line=dict(dash="dot", width=1), hoverinfo="skip",
-                    )
-                )
-            # Tight axes (robust quantiles)
-            xql, xqh = inliers["distance_km"].quantile([0.01, 0.995]).tolist()
-            yql, yqh = inliers["duration_min"].quantile([0.01, 0.995]).tolist()
-            if np.isfinite(xql) and np.isfinite(xqh) and xql < xqh:
-                fig2.update_xaxes(range=[float(xql), float(xqh)])
-            if np.isfinite(yql) and np.isfinite(yqh) and yql < yqh:
-                fig2.update_yaxes(range=[float(yql), float(yqh)])
-
-        fig2.update_layout(
-            height=560,
-            title="Trip operating envelope",
-            xaxis_title="Distance (km)",
-            yaxis_title="Duration (min)",
-            margin=dict(l=20, r=20, t=60, b=30),
-        )
-        st.plotly_chart(fig2, use_container_width=True)
-
-        # ===== Weather relationships =====
-        st.subheader("Weather relationships")
-        c1, c2 = st.columns(2)
-        temp_ok = "avg_temp_c" in df_f.columns and df_f["avg_temp_c"].notna().any()
-        wind_ok = "wind_kph" in df_f.columns and df_f["wind_kph"].notna().any()
-
-        # Speed vs temperature
-        with c1:
-            if temp_ok:
-                dat = df_f[m_spd & df_f["avg_temp_c"].notna()]
-                nmax = 30000
-                if len(dat) > nmax:
-                    dat = dat.sample(n=nmax, random_state=4)
-                figt = px.scatter(
-                    dat, x="avg_temp_c", y="speed_kmh", opacity=0.7,
-                    labels={"avg_temp_c":"Avg temperature (°C)", "speed_kmh":"Speed (km/h)"}
-                )
-                # Add fit
-                x_ = pd.to_numeric(dat["avg_temp_c"], errors="coerce")
-                y_ = pd.to_numeric(dat["speed_kmh"], errors="coerce")
-                ok = x_.notna() & y_.notna()
-                if ok.sum() >= 3 and x_[ok].nunique() >= 2:
-                    a, b = np.polyfit(x_[ok], y_[ok], 1)
-                    xs = np.linspace(x_[ok].min(), x_[ok].max(), 100)
-                    ys = a * xs + b
-                    figt.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name="Linear fit", line=dict(dash="dash")))
-                figt.update_layout(height=480, title="Speed vs Temperature")
-                st.plotly_chart(figt, use_container_width=True)
-            else:
-                st.info("No temperature column available for this view.")
-
-        # Speed vs wind
-        with c2:
-            if wind_ok:
-                dat = df_f[m_spd & df_f["wind_kph"].notna()]
-                nmax = 30000
-                if len(dat) > nmax:
-                    dat = dat.sample(n=nmax, random_state=5)
-                figw = px.scatter(
-                    dat, x="wind_kph", y="speed_kmh", opacity=0.7,
-                    labels={"wind_kph":"Wind (kph)", "speed_kmh":"Speed (km/h)"}
-                )
-                x_ = pd.to_numeric(dat["wind_kph"], errors="coerce")
-                y_ = pd.to_numeric(dat["speed_kmh"], errors="coerce")
-                ok = x_.notna() & y_.notna()
-                if ok.sum() >= 3 and x_[ok].nunique() >= 2:
-                    a, b = np.polyfit(x_[ok], y_[ok], 1)
-                    xs = np.linspace(x_[ok].min(), x_[ok].max(), 100)
-                    ys = a * xs + b
-                    figw.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name="Linear fit", line=dict(dash="dash")))
-                figw.update_layout(height=480, title="Speed vs Wind")
-                st.plotly_chart(figw, use_container_width=True)
-            else:
-                st.info("No wind column available for this view.")
-
-        # Distance/Duration vs Temperature (comfort story)
-        c3, c4 = st.columns(2)
-        with c3:
-            if temp_ok:
-                dat = df_f[m_dur & df_f["avg_temp_c"].notna()]
-                nmax = 30000
-                if len(dat) > nmax:
-                    dat = dat.sample(n=nmax, random_state=6)
-                figdt = px.scatter(
-                    dat, x="avg_temp_c", y="duration_min", opacity=0.6,
-                    labels={"avg_temp_c":"Avg temperature (°C)", "duration_min":"Duration (min)"}
-                )
-                x_ = pd.to_numeric(dat["avg_temp_c"], errors="coerce")
-                y_ = pd.to_numeric(dat["duration_min"], errors="coerce")
-                ok = x_.notna() & y_.notna()
-                if ok.sum() >= 3 and x_[ok].nunique() >= 2:
-                    a, b = np.polyfit(x_[ok], y_[ok], 1)
-                    xs = np.linspace(x_[ok].min(), x_[ok].max(), 100)
-                    ys = a * xs + b
-                    figdt.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name="Linear fit", line=dict(dash="dash")))
-                figdt.update_layout(height=420, title="Duration vs Temperature")
-                st.plotly_chart(figdt, use_container_width=True)
-
-        with c4:
-            if temp_ok:
-                dat = df_f[m_dst & df_f["avg_temp_c"].notna()]
-                nmax = 30000
-                if len(dat) > nmax:
-                    dat = dat.sample(n=nmax, random_state=7)
-                figDxT = px.scatter(
-                    dat, x="avg_temp_c", y="distance_km", opacity=0.6,
-                    labels={"avg_temp_c":"Avg temperature (°C)", "distance_km":"Distance (km)"}
-                )
-                x_ = pd.to_numeric(dat["avg_temp_c"], errors="coerce")
-                y_ = pd.to_numeric(dat["distance_km"], errors="coerce")
-                ok = x_.notna() & y_.notna()
-                if ok.sum() >= 3 and x_[ok].nunique() >= 2:
-                    a, b = np.polyfit(x_[ok], y_[ok], 1)
-                    xs = np.linspace(x_[ok].min(), x_[ok].max(), 100)
-                    ys = a * xs + b
-                    figDxT.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name="Linear fit", line=dict(dash="dash")))
-                figDxT.update_layout(height=420, title="Distance vs Temperature")
-                st.plotly_chart(figDxT, use_container_width=True)
-
-        # ===== 2D density: distance vs duration =====
-        st.markdown("### 🔳 2D density: distance vs duration")
-        try:
-            inliers_all = df_f[m_dst & m_dur].copy()
-            inliers_sample = inliers_all.sample(n=min(len(inliers_all), 60000), random_state=11) if len(inliers_all) > 60000 else inliers_all
-            fig_hex = px.density_heatmap(
-                inliers_sample, x="distance_km", y="duration_min",
-                nbinsx=60, nbinsy=60, histfunc="count",
-                labels={"distance_km":"Distance (km)", "duration_min":"Duration (min)"},
-                color_continuous_scale="Viridis"
-            )
-            fig_hex.update_layout(height=520)
-            st.plotly_chart(fig_hex, use_container_width=True)
-        except Exception as e:
-            st.caption(f"Density heatmap unavailable: {e}")
-
-        # ===== Correlations (quick view) =====
-        st.markdown("### 🔗 Correlations (quick view)")
-        corr_cols = [c for c in ["duration_min","distance_km","speed_kmh","avg_temp_c","wind_kph"] if c in df_f.columns]
-        if len(corr_cols) >= 2:
-            corr_mat = df_f[corr_cols].corr(numeric_only=True)
-            fig_corr = px.imshow(corr_mat, text_auto=True, aspect="auto", labels=dict(color="r"))
-            fig_corr.update_layout(height=420)
-            st.plotly_chart(fig_corr, use_container_width=True)
+            _add_linear_fit(figt, dat["avg_temp_c"], dat["speed_kmh"])
+            figt.update_layout(height=480, title="Speed vs Temperature")
+            st.plotly_chart(figt, use_container_width=True)
         else:
-            st.caption("Not enough numeric columns to compute a correlation matrix.")
+            st.info("No temperature column available for this view.")
 
-        # ===== Rain/Wet impact on duration & speed =====
-        st.subheader("Rain impact on trip characteristics")
-        has_precip_bin = ("precip_bin" in df_f.columns) and df_f["precip_bin"].notna().any()
-        has_wet_flag = ("wet_day" in df_f.columns)
+    # Speed vs wind
+    with c2:
+        if wind_ok:
+            dat = df_filtered[m_spd & df_filtered["wind_kph"].notna()]
+            if len(dat) > 30_000:
+                dat = dat.sample(n=30_000, random_state=5)
+            figw = px.scatter(
+                dat, x="wind_kph", y="speed_kmh", opacity=0.7,
+                labels={"wind_kph": "Wind (kph)", "speed_kmh": "Speed (km/h)"},
+            )
+            _add_linear_fit(figw, dat["wind_kph"], dat["speed_kmh"])
+            figw.update_layout(height=480, title="Speed vs Wind")
+            st.plotly_chart(figw, use_container_width=True)
+        else:
+            st.info("No wind column available for this view.")
 
-        cc1, cc2 = st.columns(2)
-        with cc1:
-            if has_precip_bin:
-                figpb = px.box(
-                    df_f[m_dur], x="precip_bin", y="duration_min",
-                    category_orders={"precip_bin":["Low","Medium","High"]},
-                    labels={"precip_bin":"Precipitation", "duration_min":"Duration (min)"}
-                )
-                figpb.update_layout(height=420, title="Duration by Precipitation")
-                st.plotly_chart(figpb, use_container_width=True)
-            elif has_wet_flag:
-                figwd = px.box(
-                    df_f[m_dur].assign(day_type=lambda x: x["wet_day"].map({0:"Dry",1:"Wet"})),
-                    x="day_type", y="duration_min",
-                    labels={"day_type":"Day type", "duration_min":"Duration (min)"}
-                )
-                figwd.update_layout(height=420, title="Duration: Wet vs Dry")
-                st.plotly_chart(figwd, use_container_width=True)
+    # Distance/Duration vs Temperature (comfort story)
+    c3, c4 = st.columns(2)
+    with c3:
+        if temp_ok:
+            dat = df_filtered[m_dur & df_filtered["avg_temp_c"].notna()]
+            if len(dat) > 30_000:
+                dat = dat.sample(n=30_000, random_state=6)
+            figdt = px.scatter(
+                dat, x="avg_temp_c", y="duration_min", opacity=0.6,
+                labels={"avg_temp_c": "Avg temperature (°C)", "duration_min": "Duration (min)"},
+            )
+            _add_linear_fit(figdt, dat["avg_temp_c"], dat["duration_min"])
+            figdt.update_layout(height=420, title="Duration vs Temperature")
+            st.plotly_chart(figdt, use_container_width=True)
+    with c4:
+        if temp_ok:
+            dat = df_filtered[m_dst & df_filtered["avg_temp_c"].notna()]
+            if len(dat) > 30_000:
+                dat = dat.sample(n=30_000, random_state=7)
+            figDxT = px.scatter(
+                dat, x="avg_temp_c", y="distance_km", opacity=0.6,
+                labels={"avg_temp_c": "Avg temperature (°C)", "distance_km": "Distance (km)"},
+            )
+            _add_linear_fit(figDxT, dat["avg_temp_c"], dat["distance_km"])
+            figDxT.update_layout(height=420, title="Distance vs Temperature")
+            st.plotly_chart(figDxT, use_container_width=True)
 
-        with cc2:
-            if has_precip_bin:
-                figpbs = px.box(
-                    df_f[m_spd], x="precip_bin", y="speed_kmh",
-                    category_orders={"precip_bin":["Low","Medium","High"]},
-                    labels={"precip_bin":"Precipitation", "speed_kmh":"Speed (km/h)"}
-                )
-                figpbs.update_layout(height=420, title="Speed by Precipitation")
-                st.plotly_chart(figpbs, use_container_width=True)
-            elif has_wet_flag:
-                figwds = px.box(
-                    df_f[m_spd].assign(day_type=lambda x: x["wet_day"].map({0:"Dry",1:"Wet"})),
-                    x="day_type", y="speed_kmh",
-                    labels={"day_type":"Day type", "speed_kmh":"Speed (km/h)"}
-                )
-                figwds.update_layout(height=420, title="Speed: Wet vs Dry")
-                st.plotly_chart(figwds, use_container_width=True)
+    # ===== 2D density: distance vs duration =====
+    st.markdown("### 🔳 2D density: distance vs duration")
+    try:
+        inliers_all = df_filtered[m_dst & m_dur].copy()
+        inliers_sample = inliers_all.sample(n=min(len(inliers_all), 60_000), random_state=11) if len(inliers_all) > 60_000 else inliers_all
+        fig_hex = px.density_heatmap(
+            inliers_sample, x="distance_km", y="duration_min",
+            nbinsx=60, nbinsy=60, histfunc="count",
+            labels={"distance_km": "Distance (km)", "duration_min": "Duration (min)"},
+            color_continuous_scale="Viridis",
+        )
+        fig_hex.update_layout(height=520)
+        st.plotly_chart(fig_hex, use_container_width=True)
+    except Exception as e:
+        st.caption(f"Density heatmap unavailable: {e}")
 
-        # ===== Quick weather deltas (KPIs) =====
-        k1, k2, k3, k4 = st.columns(4)
-        with k1:
-            if has_wet_flag and df_f["wet_day"].notna().any():
-                dry_spd = df_f.loc[m_spd & (df_f["wet_day"]==0), "speed_kmh"].mean()
-                wet_spd = df_f.loc[m_spd & (df_f["wet_day"]==1), "speed_kmh"].mean()
-                if pd.notnull(dry_spd) and pd.notnull(wet_spd) and dry_spd>0:
-                    st.metric("Speed: Wet vs Dry", f"{(wet_spd-dry_spd)/dry_spd*100:+.1f}%")
-        with k2:
-            if wind_ok:
-                calm_spd = df_f.loc[m_spd & (df_f["wind_kph"]<10), "speed_kmh"].mean()
-                windy_spd = df_f.loc[m_spd & (df_f["wind_kph"]>=20), "speed_kmh"].mean()
-                if pd.notnull(calm_spd) and pd.notnull(windy_spd) and calm_spd>0:
-                    st.metric("Speed: Windy (≥20) vs Calm (<10)", f"{(windy_spd-calm_spd)/calm_spd*100:+.1f}%")
-        with k3:
-            if temp_ok:
-                comfy = df_f.loc[m_spd & df_f["avg_temp_c"].between(15,25), "speed_kmh"].mean()
-                extreme = df_f.loc[m_spd & (~df_f["avg_temp_c"].between(5,30)), "speed_kmh"].mean()
-                if pd.notnull(comfy) and pd.notnull(extreme) and comfy != 0:
-                    st.metric("Speed: Comfy (15–25°C) vs Extreme", f"{(comfy-extreme)/comfy*100:+.1f}%")
-        with k4:
-            if has_precip_bin:
-                low_dur = df_f.loc[m_dur & (df_f["precip_bin"]=="Low"), "duration_min"].mean()
-                high_dur = df_f.loc[m_dur & (df_f["precip_bin"]=="High"), "duration_min"].mean()
-                if pd.notnull(low_dur) and pd.notnull(high_dur) and low_dur>0:
-                    st.metric("Duration: High rain vs Low", f"{(high_dur-low_dur)/low_dur*100:+.1f}%")
+    # ===== Correlations (quick view) =====
+    st.markdown("### 🔗 Correlations (quick view)")
+    corr_cols = [c for c in ["duration_min", "distance_km", "speed_kmh", "avg_temp_c", "wind_kph"] if c in df_filtered.columns]
+    if len(corr_cols) >= 2:
+        corr_mat = df_filtered[corr_cols].corr(numeric_only=True)
+        fig_corr = px.imshow(corr_mat, text_auto=True, aspect="auto", labels=dict(color="r"))
+        fig_corr.update_layout(height=420)
+        st.plotly_chart(fig_corr, use_container_width=True)
+    else:
+        st.caption("Not enough numeric columns to compute a correlation matrix.")
 
-elif page == "Member vs Casual Profiles":
+    # ===== Rain/Wet impact on duration & speed =====
+    st.subheader("Rain impact on trip characteristics")
+    has_precip_bin = ("precip_bin" in df_filtered.columns) and df_filtered["precip_bin"].notna().any()
+    has_wet_flag = ("wet_day" in df_filtered.columns)
+
+    cc1, cc2 = st.columns(2)
+    with cc1:
+        if has_precip_bin:
+            figpb = px.box(
+                df_filtered[m_dur], x="precip_bin", y="duration_min",
+                category_orders={"precip_bin": ["Low", "Medium", "High"]},
+                labels={"precip_bin": "Precipitation", "duration_min": "Duration (min)"},
+            )
+            figpb.update_layout(height=420, title="Duration by Precipitation")
+            st.plotly_chart(figpb, use_container_width=True)
+        elif has_wet_flag:
+            figwd = px.box(
+                df_filtered[m_dur].assign(day_type=lambda x: x["wet_day"].map({0: "Dry", 1: "Wet"})),
+                x="day_type", y="duration_min",
+                labels={"day_type": "Day type", "duration_min": "Duration (min)"},
+            )
+            figwd.update_layout(height=420, title="Duration: Wet vs Dry")
+            st.plotly_chart(figwd, use_container_width=True)
+
+    with cc2:
+        if has_precip_bin:
+            figpbs = px.box(
+                df_filtered[m_spd], x="precip_bin", y="speed_kmh",
+                category_orders={"precip_bin": ["Low", "Medium", "High"]},
+                labels={"precip_bin": "Precipitation", "speed_kmh": "Speed (km/h)"},
+            )
+            figpbs.update_layout(height=420, title="Speed by Precipitation")
+            st.plotly_chart(figpbs, use_container_width=True)
+        elif has_wet_flag:
+            figwds = px.box(
+                df_filtered[m_spd].assign(day_type=lambda x: x["wet_day"].map({0: "Dry", 1: "Wet"})),
+                x="day_type", y="speed_kmh",
+                labels={"day_type": "Day type", "speed_kmh": "Speed (km/h)"},
+            )
+            figwds.update_layout(height=420, title="Speed: Wet vs Dry")
+            st.plotly_chart(figwds, use_container_width=True)
+
+    # ===== Quick weather deltas (KPIs) =====
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        if has_wet_flag and df_filtered["wet_day"].notna().any():
+            dry_spd = df_filtered.loc[m_spd & (df_filtered["wet_day"] == 0), "speed_kmh"].mean()
+            wet_spd = df_filtered.loc[m_spd & (df_filtered["wet_day"] == 1), "speed_kmh"].mean()
+            if pd.notnull(dry_spd) and pd.notnull(wet_spd) and dry_spd > 0:
+                st.metric("Speed: Wet vs Dry", f"{(wet_spd - dry_spd) / dry_spd * 100:+.1f}%")
+    with k2:
+        if "wind_kph" in df_filtered.columns and df_filtered["wind_kph"].notna().any():
+            calm_spd = df_filtered.loc[m_spd & (df_filtered["wind_kph"] < 10), "speed_kmh"].mean()
+            windy_spd = df_filtered.loc[m_spd & (df_filtered["wind_kph"] >= 20), "speed_kmh"].mean()
+            if pd.notnull(calm_spd) and pd.notnull(windy_spd) and calm_spd > 0:
+                st.metric("Speed: Windy (≥20) vs Calm (<10)", f"{(windy_spd - calm_spd) / calm_spd * 100:+.1f}%")
+    with k3:
+        if temp_ok:
+            comfy = df_filtered.loc[m_spd & df_filtered["avg_temp_c"].between(15, 25), "speed_kmh"].mean()
+            extreme = df_filtered.loc[m_spd & (~df_filtered["avg_temp_c"].between(5, 30)), "speed_kmh"].mean()
+            if pd.notnull(comfy) and pd.notnull(extreme) and comfy != 0:
+                st.metric("Speed: Comfy (15–25°C) vs Extreme", f"{(comfy - extreme) / comfy * 100:+.1f}%")
+    with k4:
+        if has_precip_bin:
+            low_dur = df_filtered.loc[m_dur & (df_filtered["precip_bin"] == "Low"), "duration_min"].mean()
+            high_dur = df_filtered.loc[m_dur & (df_filtered["precip_bin"] == "High"), "duration_min"].mean()
+            if pd.notnull(low_dur) and pd.notnull(high_dur) and low_dur > 0:
+                st.metric("Duration: High rain vs Low", f"{(high_dur - low_dur) / low_dur * 100:+.1f}%")
+
+# ───────────────────── Page: Member vs Casual Profiles ─────────────────────
+
+def _clean_member_labels(df: pd.DataFrame, src_col: str = "member_type", out_col: str = "member_type_clean") -> pd.DataFrame:
+    """Normalize member labels to ASCII-safe values used across charts."""
+    out = df.copy()
+    if src_col not in out.columns:
+        out[out_col] = "Other"
+        return out
+    out[out_col] = (
+        out[src_col].astype(str).str.strip().str.lower().map({"member": "Member", "casual": "Casual"})
+    ).fillna("Other")
+    return out
+
+def _safe_median(s: pd.Series) -> float:
+    s = pd.to_numeric(s, errors="coerce")
+    return float(s.median()) if s.notna().any() else float("nan")
+
+def page_member_vs_casual(df_filtered: pd.DataFrame) -> None:
+    """Compare Member vs Casual riding patterns: KPIs, rhythms, weather sensitivity, stations."""
     st.header("👥 Member vs Casual riding patterns")
 
-    # ─────────── Guards & clean member labels (ASCII only for charts) ───────────
-    if "member_type" not in df_f.columns or "hour" not in df_f.columns:
+    # Guards
+    if df_filtered is None or df_filtered.empty:
+        st.info("No trips in selection.")
+        return
+    need = {"member_type", "hour"}
+    if not need.issubset(df_filtered.columns):
         st.info("Need `member_type` and `started_at` (engineered `hour`).")
-        st.stop()
-
-    # Normalize member labels (ASCII-safe for Plotly)
-    df_mc = df_f.copy()
-    df_mc["member_type_clean"] = (
-        df_mc["member_type"].astype(str).str.strip().str.lower().map({"member": "Member", "casual": "Casual"})
-    ).fillna("Other")
+        return
 
     legend_member_title = "Member Type"
 
-    # ─────────── KPI helpers ───────────
-    def _safe_median(s):
-        s = pd.to_numeric(s, errors="coerce")
-        return float(s.median()) if s.notna().any() else float("nan")
+    # Clean labels
+    df_mc = _clean_member_labels(df_filtered)
 
-    # Per-group aggregates
+    # ───────── KPIs ─────────
     grp = df_mc.groupby("member_type_clean", as_index=False).agg(
         rides=("member_type_clean", "size"),
         duration_med=("duration_min", _safe_median) if "duration_min" in df_mc.columns else ("member_type_clean", "size"),
@@ -2087,65 +2032,23 @@ elif page == "Member vs Casual Profiles":
         if {"Member", "Casual"}.issubset(set(temp_meds.index)):
             temp_gap = float(temp_meds["Casual"] - temp_meds["Member"])
 
-    # ─────────── At-a-glance (dark, uniform cards) ───────────
+    # KPI cards (uniform CSS)
     st.markdown("#### ✨ At-a-glance (selection)")
-
     st.markdown("""
     <style>
-    /* container fixes so columns stay even height */
-    .kpi-row { display: flex; gap: 16px; }
-    .kpi-col { flex: 1 1 0; }
+    .kpi-box{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:16px;
+      padding:12px 14px;min-height:132px;display:flex;flex-direction:column;justify-content:space-between;
+      box-shadow:0 2px 10px rgba(0,0,0,0.25);transition:transform .15s ease, box-shadow .15s ease;}
+    .kpi-box:hover{transform:translateY(-1px);box-shadow:0 6px 16px rgba(0,0,0,0.35);}
+    .kpi-head{display:flex;align-items:center;gap:8px;color:#e5e7eb;font-weight:700;font-size:1.00rem;letter-spacing:.2px;opacity:.95;}
+    .kpi-emoji{font-size:1.05rem;line-height:1;}
+    .kpi-value{color:#f3f4f6;font-weight:800;font-size:1.06rem;margin:2px 0 0;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .kpi-sub{color:#cbd5e1;font-size:.82rem;line-height:1.25;margin-top:4px;}
+    </style>""", unsafe_allow_html=True)
 
-    .kpi-box {
-        background: rgba(255,255,255,0.06); /* dark translucent card */
-        border: 1px solid rgba(255,255,255,0.12);
-        border-radius: 16px;
-        padding: 12px 14px;
-        min-height: 132px;  /* uniform height */
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.25);
-        transition: transform .15s ease, box-shadow .15s ease;
-    }
-    .kpi-box:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 6px 16px rgba(0,0,0,0.35);
-    }
-    .kpi-head {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        color: #e5e7eb; /* light text */
-        font-weight: 700;
-        font-size: 1.00rem; /* smaller so it fits */
-        letter-spacing: .2px;
-        opacity: 0.95;
-    }
-    .kpi-emoji { font-size: 1.05rem; line-height: 1; }
-    .kpi-value {
-        color: #f3f4f6;
-        font-weight: 800;
-        font-size: 1.06rem; /* smaller than before for fit */
-        margin: 2px 0 0 0;
-        line-height: 1.1;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-    .kpi-sub {
-        color: #cbd5e1;
-        font-size: 0.82rem;  /* smaller subcopy */
-        line-height: 1.25;
-        margin-top: 4px;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-    # Compute values
-    m = grp.set_index("member_type_clean")
-    total_member = int(m.loc["Member", "rides"]) if "Member" in m.index else 0
-    total_casual = int(m.loc["Casual", "rides"]) if "Casual" in m.index else 0
+    m = grp.set_index("member_type_clean") if not grp.empty else pd.DataFrame()
+    total_member = int(m.loc["Member", "rides"]) if ("Member" in m.index) else 0
+    total_casual = int(m.loc["Casual", "rides"]) if ("Casual" in m.index) else 0
     share_member = 100.0 * total_member / max(total_member + total_casual, 1)
 
     d_med_m = m.at["Member", "duration_med"] if ("Member" in m.index and "duration_med" in m.columns) else np.nan
@@ -2162,50 +2065,34 @@ elif page == "Member vs Casual Profiles":
 
     temp_txt = f"{temp_gap:+.1f}°C" if (temp_gap is not None and np.isfinite(temp_gap)) else "—"
 
-    # Render evenly-sized boxes (5 columns)
     ca, cb, cc, cd, ce = st.columns(5)
     with ca:
         st.markdown(f"""
-        <div class="kpi-box">
-            <div class="kpi-head"><span class="kpi-emoji">🧑‍💼</span>Member share</div>
-            <div class="kpi-value">{share_member:.1f}%</div>
-            <div class="kpi-sub">of total rides</div>
-        </div>
-        """, unsafe_allow_html=True)
+        <div class="kpi-box"><div class="kpi-head"><span class="kpi-emoji">🧑‍💼</span>Member share</div>
+        <div class="kpi-value">{share_member:.1f}%</div><div class="kpi-sub">of total rides</div></div>""",
+        unsafe_allow_html=True)
     with cb:
         st.markdown(f"""
-        <div class="kpi-box">
-            <div class="kpi-head"><span class="kpi-emoji">⏱️</span>Median duration</div>
-            <div class="kpi-value">{dur_txt}</div>
-            <div class="kpi-sub">Member (M) vs Casual (C)</div>
-        </div>
-        """, unsafe_allow_html=True)
+        <div class="kpi-box"><div class="kpi-head"><span class="kpi-emoji">⏱️</span>Median duration</div>
+        <div class="kpi-value">{dur_txt}</div><div class="kpi-sub">Member (M) vs Casual (C)</div></div>""",
+        unsafe_allow_html=True)
     with cc:
         st.markdown(f"""
-        <div class="kpi-box">
-            <div class="kpi-head"><span class="kpi-emoji">🚴</span>Median speed</div>
-            <div class="kpi-value">{spd_txt}</div>
-            <div class="kpi-sub">Member (M) vs Casual (C)</div>
-        </div>
-        """, unsafe_allow_html=True)
+        <div class="kpi-box"><div class="kpi-head"><span class="kpi-emoji">🚴</span>Median speed</div>
+        <div class="kpi-value">{spd_txt}</div><div class="kpi-sub">Member (M) vs Casual (C)</div></div>""",
+        unsafe_allow_html=True)
     with cd:
         st.markdown(f"""
-        <div class="kpi-box">
-            <div class="kpi-head"><span class="kpi-emoji">🌧️</span>Rain penalty</div>
-            <div class="kpi-value">{rain_txt}</div>
-            <div class="kpi-sub">Wet vs dry (group-wise)</div>
-        </div>
-        """, unsafe_allow_html=True)
+        <div class="kpi-box"><div class="kpi-head"><span class="kpi-emoji">🌧️</span>Rain penalty</div>
+        <div class="kpi-value">{rain_txt}</div><div class="kpi-sub">Wet vs dry (group-wise)</div></div>""",
+        unsafe_allow_html=True)
     with ce:
         st.markdown(f"""
-        <div class="kpi-box">
-            <div class="kpi-head"><span class="kpi-emoji">🌡️</span>Temp pref. gap</div>
-            <div class="kpi-value">{temp_txt}</div>
-            <div class="kpi-sub">Casual − Member (median °C)</div>
-        </div>
-        """, unsafe_allow_html=True)
+        <div class="kpi-box"><div class="kpi-head"><span class="kpi-emoji">🌡️</span>Temp pref. gap</div>
+        <div class="kpi-value">{temp_txt}</div><div class="kpi-sub">Casual − Member (median °C)</div></div>""",
+        unsafe_allow_html=True)
 
-    # ─────────── Tabs ───────────
+    # ───────── Tabs ─────────
     tab_beh, tab_wx, tab_perf, tab_station = st.tabs(
         ["🕑 Behavior", "🌦️ Weather mix", "📈 Performance vs temp", "📍 Stations"]
     )
@@ -2213,6 +2100,8 @@ elif page == "Member vs Casual Profiles":
     # ======================= Behavior tab =======================
     with tab_beh:
         st.subheader("Daily rhythms")
+
+        # Hourly profile
         g_hour = df_mc.groupby(["member_type_clean", "hour"]).size().rename("rides").reset_index()
         fig_h = px.line(
             g_hour, x="hour", y="rides", color="member_type_clean",
@@ -2222,6 +2111,7 @@ elif page == "Member vs Casual Profiles":
         fig_h.update_layout(height=380, title="Hourly profile — Member vs Casual")
         st.plotly_chart(fig_h, use_container_width=True)
 
+        # Weekday profile
         if "weekday" in df_mc.columns:
             g_wd = df_mc.groupby(["member_type_clean", "weekday"]).size().rename("rides").reset_index()
             g_wd["weekday_name"] = g_wd["weekday"].map({0:"Mon",1:"Tue",2:"Wed",3:"Thu",4:"Fri",5:"Sat",6:"Sun"})
@@ -2256,7 +2146,7 @@ elif page == "Member vs Casual Profiles":
                 vdat = df_mc.dropna(subset=["avg_temp_c"])
                 fig_v = px.violin(
                     vdat, x="member_type_clean", y="avg_temp_c", box=True, points=False,
-                    labels={"member_type_clean": legend_member_title, "avg_temp_c": "Avg temp during rides (°C)"}
+                    labels={"member_type_clean": legend_member_title, "avg_temp_c": "Avg temp during rides (°C)"},
                 )
                 fig_v.update_layout(height=360, title="Temperature distribution by group")
                 st.plotly_chart(fig_v, use_container_width=True)
@@ -2264,23 +2154,30 @@ elif page == "Member vs Casual Profiles":
     # ======================= Performance tab =======================
     with tab_perf:
         st.subheader("Speed & duration vs temperature")
-        if {"avg_temp_c", "speed_kmh", "duration_min"}.issubset(df_mc.columns):
+        have_cols = {"avg_temp_c", "speed_kmh", "duration_min"}.issubset(df_mc.columns)
+        if have_cols and df_mc["avg_temp_c"].notna().any():
             tbins = [-20, -5, 0, 5, 10, 15, 20, 25, 30, 35, 50]
             tlabs = ["<-5","-5–0","0–5","5–10","10–15","15–20","20–25","25–30","30–35",">35"]
             dat = df_mc.dropna(subset=["avg_temp_c"]).copy()
             dat["temp_band"] = pd.cut(dat["avg_temp_c"], tbins, labels=tlabs, include_lowest=True)
 
             gs = dat.groupby(["member_type_clean", "temp_band"])["speed_kmh"].median().reset_index()
-            figS = px.line(gs, x="temp_band", y="speed_kmh", color="member_type_clean", markers=True,
-                           labels={"temp_band":"Temp band (°C)", "speed_kmh":"Median speed"})
+            figS = px.line(
+                gs, x="temp_band", y="speed_kmh", color="member_type_clean", markers=True,
+                labels={"temp_band": "Temp band (°C)", "speed_kmh": "Median speed"},
+            )
             figS.update_layout(height=360, title="Median speed by temperature band")
             st.plotly_chart(figS, use_container_width=True)
 
             gd = dat.groupby(["member_type_clean", "temp_band"])["duration_min"].median().reset_index()
-            figD = px.line(gd, x="temp_band", y="duration_min", color="member_type_clean", markers=True,
-                           labels={"temp_band":"Temp band (°C)", "duration_min":"Median duration (min)"})
+            figD = px.line(
+                gd, x="temp_band", y="duration_min", color="member_type_clean", markers=True,
+                labels={"temp_band": "Temp band (°C)", "duration_min": "Median duration (min)"},
+            )
             figD.update_layout(height=360, title="Median duration by temperature band")
             st.plotly_chart(figD, use_container_width=True)
+        else:
+            st.caption("Need avg_temp_c, speed_kmh, duration_min for this section.")
 
     # ======================= Stations tab =======================
     with tab_station:
@@ -2299,7 +2196,8 @@ elif page == "Member vs Casual Profiles":
             for label, col in [("Member", cL), ("Casual", cR)]:
                 topk = mrg[mrg["member_type_clean"] == label].copy()
                 if topk.empty:
-                    with col: st.info(f"No {label} rides in this selection.")
+                    with col:
+                        st.info(f"No {label} rides in this selection.")
                     continue
                 tot = float(by_group.loc[by_group["member_type_clean"] == label, "rides"].sum())
                 topk["p_group"] = topk["rides"] / max(tot, 1.0)
@@ -2309,20 +2207,25 @@ elif page == "Member vs Casual Profiles":
                     topk.sort_values("lift", ascending=False).head(topN),
                     x="station_s", y="lift",
                     hover_data={"start_station_name": True, "rides": ":,", "lift": ":.2f"},
-                    labels={"station_s": "Station", "lift": "Lift vs overall"}
+                    labels={"station_s": "Station", "lift": "Lift vs overall"},
                 )
                 fig_b.update_layout(height=420, title=f"Top stations with lift — {label}")
                 fig_b.update_xaxes(tickangle=45)
                 with col:
                     st.plotly_chart(fig_b, use_container_width=True)
-                    
-elif page == "OD Flows — Sankey + Map":
+        else:
+            st.caption("No station column available in this selection.")
+
+# ───────────────────── Page: OD Flows — Sankey + Map ─────────────────────
+
+def page_od_flows(df_filtered: pd.DataFrame) -> None:
+    """Top origin→destination flows as a Sankey + Arc map, with time-slice and member split options."""
     st.header("🔀 Origin → Destination — Sankey + Map")
 
     need = {"start_station_name", "end_station_name"}
-    if not need.issubset(df_f.columns):
+    if df_filtered is None or df_filtered.empty or not need.issubset(df_filtered.columns):
         st.info("Need start and end station names.")
-        st.stop()
+        return
 
     # ───────── Controls ─────────
     c1, c2, c3, c4 = st.columns(4)
@@ -2333,7 +2236,7 @@ elif page == "OD Flows — Sankey + Map":
     with c3:
         topk = st.slider("Top-k edges", 10, 250, 60, 10)
     with c4:
-        member_split = st.checkbox("Split by member type", value=("member_type_display" in df_f.columns))
+        member_split = st.checkbox("Split by member type", value=("member_type_display" in df_filtered.columns))
 
     c5, c6, c7 = st.columns(3)
     with c5:
@@ -2344,8 +2247,8 @@ elif page == "OD Flows — Sankey + Map":
         render_now = st.checkbox("Render visuals", value=False, help="Tick to build Sankey + Map")
 
     # Apply time slice & build edges
-    subset = _time_slice(df_f, mode)
-    edges = _cached_edges(subset, per_origin, topk, min_rides, drop_loops, member_split)
+    subset = _time_slice(df_filtered, mode)
+    edges = _cached_edges(subset, per_origin, int(topk), int(min_rides), drop_loops, member_split)
     if edges is None or not isinstance(edges, pd.DataFrame):
         edges = pd.DataFrame(columns=["start_station_name", "end_station_name", "rides"])
 
@@ -2355,6 +2258,7 @@ elif page == "OD Flows — Sankey + Map":
         if member_split and "member_type_display" in subset.columns:
             gb_cols.append("member_type_display")
         g_all = subset.groupby(gb_cols).size().rename("rides").reset_index()
+
         if drop_loops and not g_all.empty:
             s = g_all["start_station_name"].astype(str)
             e = g_all["end_station_name"].astype(str)
@@ -2362,10 +2266,10 @@ elif page == "OD Flows — Sankey + Map":
 
         if g_all.empty:
             st.info("No OD pairs in the current slice. Try widening the date/hour filters.")
-            st.stop()
+            return
 
         counts = np.sort(g_all["rides"].to_numpy())[::-1]
-        kth = int(counts[min(max(topk - 1, 0), len(counts) - 1)])
+        kth = int(counts[min(max(int(topk) - 1, 0), len(counts) - 1)])
         st.info(
             f"No edges after filters. Suggestions:\n\n"
             f"- Lower **Min rides per edge** to ≤ **{kth}**\n"
@@ -2374,14 +2278,14 @@ elif page == "OD Flows — Sankey + Map":
         )
         with st.expander("Preview (before min-rides cut)"):
             st.dataframe(g_all.sort_values("rides", ascending=False).head(25), use_container_width=True)
-        st.stop()
+        return
 
     st.success(f"{len(edges):,} edges match current filters.")
     if not render_now:
         st.caption("Tick **Render visuals** to draw the Sankey and Map (faster app when unchecked).")
         with st.expander("Preview top flows"):
             st.dataframe(edges.sort_values("rides", ascending=False).head(20), use_container_width=True)
-        st.stop()
+        return
 
     # ───────── Sankey (with caps & stable labels) ─────────
     st.subheader("Sankey — top flows")
@@ -2392,6 +2296,7 @@ elif page == "OD Flows — Sankey + Map":
     edges_vis = edges.nlargest(MAX_LINKS, "rides").copy()
 
     def ascii_safe(s: pd.Series) -> pd.Series:
+        # Strip accents/emoji so Plotly labels stay tidy in all environments
         return s.astype(str).str.normalize("NFKD").str.encode("ascii", errors="ignore").str.decode("ascii")
 
     edges_vis["start_s"] = ascii_safe(edges_vis["start_station_name"])
@@ -2400,10 +2305,8 @@ elif page == "OD Flows — Sankey + Map":
     node_labels = pd.Index(pd.unique(edges_vis[["start_s", "end_s"]].values.ravel()))
     if len(node_labels) > MAX_NODES:
         deg = pd.concat(
-            [
-                edges_vis.groupby("start_s")["rides"].sum(),
-                edges_vis.groupby("end_s")["rides"].sum(),
-            ],
+            [edges_vis.groupby("start_s")["rides"].sum(),
+             edges_vis.groupby("end_s")["rides"].sum()],
             axis=1,
         ).fillna(0).sum(axis=1).sort_values(ascending=False)
         keep = set(deg.head(MAX_NODES).index)
@@ -2422,48 +2325,37 @@ elif page == "OD Flows — Sankey + Map":
         link_colors = None
         if member_split and "member_type_display" in edges_vis.columns:
             cmap = {"Member 🧑‍💼": "rgba(34,197,94,0.60)", "Casual 🚲": "rgba(37,99,235,0.60)"}
-            # Categorical-safe conversion to list (avoid .map on categorical series)
             mt_vals = edges_vis["member_type_display"].to_numpy()
             link_colors = [cmap.get(str(v), "rgba(180,180,180,0.45)") if not pd.isna(v) else "rgba(180,180,180,0.45)" for v in mt_vals]
 
         sankey = go.Sankey(
             node=dict(
                 label=node_labels.astype(str).tolist(),
-                pad=6,
-                thickness=12,
+                pad=6, thickness=12,
                 color="rgba(240,240,255,0.85)",
                 line=dict(color="rgba(80,80,120,0.4)", width=0.5),
             ),
-            link=dict(
-                source=src,
-                target=tgt,
-                value=vals,
-                color=link_colors,
-            ),
+            link=dict(source=src, target=tgt, value=vals, color=link_colors),
             arrangement="snap",
         )
         fig = go.Figure(sankey)
-        fig.update_layout(
-            height=560,
-            title="Top OD flows",
-            margin=dict(l=10, r=10, t=40, b=10),
-        )
+        fig.update_layout(height=560, title="Top OD flows", margin=dict(l=10, r=10, t=40, b=10))
         st.plotly_chart(fig, use_container_width=True)
 
     # ───────── Map (pydeck ArcLayer) ─────────
     st.subheader("🗺️ Map — OD arcs (width ∝ volume)")
 
-    if {"start_lat", "start_lng", "end_lat", "end_lng"}.issubset(df_f.columns):
+    if {"start_lat", "start_lng", "end_lat", "end_lng"}.issubset(df_filtered.columns):
         import pydeck as pdk
 
         map_edges = edges.nlargest(250, "rides").copy()
         starts = (
-            df_f.groupby("start_station_name")[["start_lat", "start_lng"]]
+            df_filtered.groupby("start_station_name")[["start_lat", "start_lng"]]
             .median()
             .rename(columns={"start_lat": "s_lat", "start_lng": "s_lng"})
         )
         ends = (
-            df_f.groupby("end_station_name")[["end_lat", "end_lng"]]
+            df_filtered.groupby("end_station_name")[["end_lat", "end_lng"]]
             .median()
             .rename(columns={"end_lat": "e_lat", "end_lng": "e_lng"})
         )
@@ -2481,24 +2373,18 @@ elif page == "OD Flows — Sankey + Map":
             scale = st.slider("Arc width scale", 1, 30, 10)
             geo["width"] = (scale * (np.sqrt(geo["rides"]) / np.sqrt(vmax if vmax > 0 else 1))).clip(0.5, 14)
 
-            # ✅ Robust color mapping that avoids Categorical.apply
+            # Robust color mapping
             if member_split and "member_type_display" in geo.columns:
-                _cmap = {
-                    "Member 🧑‍💼": [34, 197, 94, 200],
-                    "Casual 🚲":   [37, 99, 235, 200],
-                }
+                _cmap = {"Member 🧑‍💼": [34, 197, 94, 200], "Casual 🚲": [37, 99, 235, 200]}
                 def _mk_color(v):
-                    if pd.isna(v):
-                        return [160, 160, 160, 200]
+                    if pd.isna(v): return [160, 160, 160, 200]
                     return _cmap.get(str(v), [160, 160, 160, 200])
-
-                _vals = geo["member_type_display"].to_numpy()
-                geo["color"] = [_mk_color(v) for v in _vals]  # list of RGBA lists
+                geo["color"] = [_mk_color(v) for v in geo["member_type_display"].to_numpy()]
             else:
                 geo["color"] = [[37, 99, 235, 200]] * len(geo)
 
             geo["start_s"] = ascii_safe(geo["start_station_name"])
-            geo["end_s"] = ascii_safe(geo["end_station_name"])
+            geo["end_s"]   = ascii_safe(geo["end_station_name"])
 
             layer = pdk.Layer(
                 "ArcLayer",
@@ -2508,62 +2394,60 @@ elif page == "OD Flows — Sankey + Map":
                 get_width="width",
                 get_source_color="color",
                 get_target_color="color",
-                pickable=True,
-                auto_highlight=True,
+                pickable=True, auto_highlight=True,
             )
 
             center_lat = float(pd.concat([geo["s_lat"], geo["e_lat"]]).median())
             center_lon = float(pd.concat([geo["s_lng"], geo["e_lng"]]).median())
-
             view_state = pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=11, pitch=30, bearing=0)
 
-            tooltip = {
-                "html": "<b>{start_s}</b> → <b>{end_s}</b><br/>Rides: {rides}",
-                "style": {"backgroundColor": "rgba(17,17,17,0.9)", "color": "white"},
-            }
+            tooltip = {"html": "<b>{start_s}</b> → <b>{end_s}</b><br/>Rides: {rides}",
+                       "style": {"backgroundColor": "rgba(17,17,17,0.9)", "color": "white"}}
 
-            deck = pdk.Deck(
-                layers=[layer],
-                initial_view_state=view_state,
-                map_style="mapbox://styles/mapbox/dark-v11",
-                tooltip=tooltip,
-            )
+            deck = pdk.Deck(layers=[layer], initial_view_state=view_state,
+                            map_style="mapbox://styles/mapbox/dark-v11", tooltip=tooltip)
             st.pydeck_chart(deck)
     else:
         st.info("Trip coordinates not available for map.")
 
+    # Diagnostics + download
     with st.expander("Diagnostics — top flows table"):
         showN = st.slider("Show first N rows", 10, 200, 40, 10, key="od_diag_rows")
         st.dataframe(edges.sort_values("rides", ascending=False).head(showN), use_container_width=True)
 
-    csv_bytes = edges.to_csv(index=False).encode("utf-8")
-    st.download_button("Download OD edges (CSV)", csv_bytes, "od_edges_current_view.csv", "text/csv")
+    st.download_button(
+        "Download OD edges (CSV)",
+        edges.to_csv(index=False).encode("utf-8"),
+        "od_edges_current_view.csv",
+        "text/csv",
+    )                    
 
-# ───────────────────────── OD Matrix (Top origins × destinations) ─────────────────────────
-elif (
-    page.startswith("OD Matrix")  # robust to tiny label changes
-    or page == "OD Matrix — Top origins × destinations"
-    or page == "OD Matrix - Top origins × destinations"
-):
+
+# ───────────────────── Page: OD Matrix — Top origins × destinations ─────────────────────
+
+def page_od_matrix(df_filtered: pd.DataFrame) -> None:
+    """Top-O × Top-D OD matrix with optional normalization, ordering, and member split."""
     st.header("🧮 OD Matrix — Top origins × destinations")
 
-    # ── Required columns ──
+    # --- Guards
     need = {"start_station_name", "end_station_name"}
-    if not need.issubset(df_f.columns):
+    if df_filtered is None or df_filtered.empty or not need.issubset(df_filtered.columns):
         st.info("Need start and end station names.")
-        st.stop()
+        return
 
-    # ── Ensure a uniform member type column if available ──
+    # --- Member display column (uniform)
     mt_col = None
-    if "member_type_display" in df_f.columns:
+    if "member_type_display" in df_filtered.columns:
         mt_col = "member_type_display"
-    elif "member_type" in df_f.columns:
-        # Map raw values to pretty labels if needed
+    elif "member_type" in df_filtered.columns:
         _map = {"member": "Member 🧑‍💼", "casual": "Casual 🚲", "Member": "Member 🧑‍💼", "Casual": "Casual 🚲"}
-        df_f["member_type_display"] = df_f["member_type"].astype(str).map(_map).fillna(df_f["member_type"].astype(str))
+        df_filtered = df_filtered.copy()
+        df_filtered["member_type_display"] = (
+            df_filtered["member_type"].astype(str).map(_map).fillna(df_filtered["member_type"].astype(str))
+        )
         mt_col = "member_type_display"
 
-    # ───────── Controls ─────────
+    # --- Controls
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         mode = st.selectbox("Time slice", ["All", "Weekday", "Weekend", "AM (06–11)", "PM (16–20)"], index=0)
@@ -2584,19 +2468,26 @@ elif (
     with c8:
         log_scale = st.checkbox("Log color scale", value=False, help="√(counts + 1) for smoother contrast")
 
-    # ───────── Subset ─────────
-    subset = _time_slice(df_f, mode).copy()
-    # Safety: work with strings (avoid categorical pitfalls)
-    subset["start_station_name"] = subset["start_station_name"].astype(str)
-    subset["end_station_name"] = subset["end_station_name"].astype(str)
+    # --- Subset (time slice) & dtype safety
+    subset = _time_slice(df_filtered, mode).copy()
     if subset.empty:
         st.info("No data in this time slice.")
-        st.stop()
+        return
+    subset["start_station_name"] = subset["start_station_name"].astype(str)
+    subset["end_station_name"]   = subset["end_station_name"].astype(str)
 
-    # ───────── Builder ─────────
+    # --- Optional clustering imports (soft dependency)
+    try:
+        from scipy.cluster.hierarchy import linkage, leaves_list  # type: ignore
+        _clust_ok = True
+    except Exception:
+        linkage = leaves_list = None
+        _clust_ok = False
+
+    # --- Builder
     def build_matrix(df_src: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, dict]:
-        dbg = {}
-        # Totals for selecting top sets
+        dbg: dict[str, int | tuple[int, int]] = {}
+
         o_tot = df_src.groupby("start_station_name").size().sort_values(ascending=False)
         d_tot = df_src.groupby("end_station_name").size().sort_values(ascending=False)
         dbg["origins_total_unique"] = int(o_tot.shape[0])
@@ -2607,39 +2498,28 @@ elif (
         dbg["origins_kept"] = len(o_keep)
         dbg["dests_kept"] = len(d_keep)
 
-        df2 = df_src[
-            df_src["start_station_name"].isin(o_keep) & df_src["end_station_name"].isin(d_keep)
-        ]
-
+        df2 = df_src[df_src["start_station_name"].isin(o_keep) & df_src["end_station_name"].isin(d_keep)]
         dbg["pairs_rows_after_topN"] = int(df2.shape[0])
-
         if df2.empty:
             return pd.DataFrame(), pd.DataFrame(), o_tot, d_tot, dbg
 
         pairs = (
             df2.groupby(["start_station_name", "end_station_name"])
-            .size()
-            .rename("rides")
-            .reset_index()
+               .size().rename("rides").reset_index()
         )
         dbg["unique_pairs"] = int(pairs.shape[0])
 
         if min_rides > 1:
             pairs = pairs[pairs["rides"] >= int(min_rides)]
         dbg["pairs_after_minrides"] = int(pairs.shape[0])
-
         if pairs.empty:
             return pd.DataFrame(), pd.DataFrame(), o_tot, d_tot, dbg
 
         mat = pairs.pivot_table(
-            index="start_station_name",
-            columns="end_station_name",
-            values="rides",
-            aggfunc="sum",
-            fill_value=0,
+            index="start_station_name", columns="end_station_name", values="rides", aggfunc="sum", fill_value=0
         )
 
-        # Normalization
+        # Normalize
         if norm == "Row (per origin)":
             denom = mat.sum(axis=1).replace(0, np.nan)
             mat = (mat.T / denom).T.fillna(0.0)
@@ -2647,7 +2527,7 @@ elif (
             denom = mat.sum(axis=0).replace(0, np.nan)
             mat = (mat / denom).fillna(0.0)
 
-        # Sorting
+        # Sort
         if sort_mode == "Alphabetical":
             mat = mat.sort_index(axis=0).sort_index(axis=1)
         elif sort_mode == "By totals":
@@ -2660,24 +2540,28 @@ elif (
                 mat = mat.loc[_o, _d]
         elif sort_mode == "Clustered (if available)":
             try:
-                if (linkage is not None) and (leaves_list is not None) and mat.shape[0] > 2 and mat.shape[1] > 2:
+                if _clust_ok and mat.shape[0] > 2 and mat.shape[1] > 2:
                     rZ = linkage(mat.values, method="average", metric="euclidean")
                     cZ = linkage(mat.values.T, method="average", metric="euclidean")
                     mat = mat.loc[mat.index[leaves_list(rZ)], mat.columns[leaves_list(cZ)]]
                 else:
+                    # Fallback to totals
                     mat = mat.loc[mat.sum(axis=1).sort_values(ascending=False).index]
                     mat = mat[mat.sum(axis=0).sort_values(ascending=False).index]
             except Exception:
                 mat = mat.loc[mat.sum(axis=1).sort_values(ascending=False).index]
                 mat = mat[mat.sum(axis=0).sort_values(ascending=False).index]
 
-        dbg["matrix_shape"] = tuple(mat.shape)
+        dbg["matrix_shape"] = (int(mat.shape[0]), int(mat.shape[1]))
         return mat, pairs, o_tot, d_tot, dbg
 
-    # ───────── Heatmap ─────────
+    # --- Heatmap renderer
     def render_heatmap(mat: pd.DataFrame, title: str):
         if mat.empty:
-            st.info("Nothing to show with current filters. Try lowering **Min rides**, increasing **Top origins/destinations**, or switching order to **Alphabetical**.")
+            st.info(
+                "Nothing to show with current filters. Try lowering **Min rides**, "
+                "increasing **Top origins/destinations**, or switching order to **Alphabetical**."
+            )
             return
 
         z = mat.values.astype(float)
@@ -2694,31 +2578,26 @@ elif (
             hovertemplate = "Origin: %{y}<br>Destination: %{x}<br>Share (col): %{z:.2%}<extra></extra>"
             colorbar_title = "col share"
 
-        fig = go.Figure(
-            data=go.Heatmap(
-                z=z,
-                x=mat.columns.astype(str).tolist(),
-                y=mat.index.astype(str).tolist(),
-                colorbar=dict(title=colorbar_title),
-                hovertemplate=hovertemplate,
-            )
-        )
+        fig = go.Figure(go.Heatmap(
+            z=z,
+            x=mat.columns.astype(str).tolist(),
+            y=mat.index.astype(str).tolist(),
+            colorbar=dict(title=colorbar_title),
+            hovertemplate=hovertemplate,
+        ))
         fig.update_layout(
-            title=title,
-            xaxis_title="Destination",
-            yaxis_title="Origin",
-            height=720,
-            margin=dict(l=10, r=10, t=60, b=10),
+            title=title, xaxis_title="Destination", yaxis_title="Origin",
+            height=720, margin=dict(l=10, r=10, t=60, b=10),
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    # ───────── Render (split or combined) ─────────
+    # --- Render (split or combined)
     if member_split and (mt_col is not None) and (mt_col in subset.columns):
         tabs = st.tabs(["Member 🧑‍💼", "Casual 🚲", "All"])
         segments = [
             ("Member 🧑‍💼", subset[subset[mt_col].astype(str) == "Member 🧑‍💼"]),
-            ("Casual 🚲", subset[subset[mt_col].astype(str) == "Casual 🚲"]),
-            ("All", subset),
+            ("Casual 🚲",   subset[subset[mt_col].astype(str) == "Casual 🚲"]),
+            ("All",         subset),
         ]
         for (label, seg_df), tab in zip(segments, tabs):
             with tab:
@@ -2726,8 +2605,7 @@ elif (
                 render_heatmap(mat, f"Top {mat.shape[0]} origins × Top {mat.shape[1]} destinations — {label}")
 
                 with st.expander("Diagnostics & Download"):
-                    # Quick reasons-why if empty
-                    st.write(dbg)
+                    st.write(dbg)  # why it might be empty
                     if not pairs.empty:
                         st.dataframe(pairs.sort_values("rides", ascending=False).head(40), use_container_width=True)
                         st.download_button(
@@ -2747,35 +2625,32 @@ elif (
     else:
         mat, pairs, o_tot, d_tot, dbg = build_matrix(subset)
         render_heatmap(mat, f"Top {mat.shape[0]} origins × Top {mat.shape[1]} destinations")
-
         with st.expander("Diagnostics & Download"):
-            st.write(dbg)  # ← tells you exactly why it might be empty
+            st.write(dbg)
             if not pairs.empty:
                 st.dataframe(pairs.sort_values("rides", ascending=False).head(40), use_container_width=True)
                 st.download_button("Download pairs CSV", pairs.to_csv(index=False).encode("utf-8"), "od_pairs.csv", "text/csv")
                 st.download_button(
                     "Download matrix CSV",
                     mat.reset_index().rename(columns={"start_station_name": "origin"}).to_csv(index=False).encode("utf-8"),
-                    "od_matrix.csv",
-                    "text/csv",
+                    "od_matrix.csv", "text/csv",
                 )
 
-# ───────────────────────── Most popular start stations ─────────────────────────
-elif (
-    page == "Station Popularity"
-    or page == "🚉 Most popular start stations"
-    or page.startswith("Most popular start stations")
-):
+# ───────────────────── Page: Station Popularity (Top start stations) ─────────────────────
+
+def page_station_popularity(df_filtered: pd.DataFrame) -> None:
+    """Top start stations by rides or share, with optional weather/member splits and monthly/hourly breakdowns."""
     st.header("🚉 Most popular start stations")
 
-    if "start_station_name" not in df_f.columns:
-        st.warning("`start_station_name` not found in sample.")
-        st.stop()
+    if df_filtered is None or df_filtered.empty or "start_station_name" not in df_filtered.columns:
+        st.warning("`start_station_name` not found in selection.")
+        return
 
-    # Ensure pretty member display if only raw member_type exists
-    if "member_type_display" not in df_f.columns and "member_type" in df_f.columns:
+    # Pretty member display if only raw member_type exists
+    df = df_filtered.copy()
+    if "member_type_display" not in df.columns and "member_type" in df.columns:
         _map = {"member": "Member 🧑‍💼", "casual": "Casual 🚲", "Member": "Member 🧑‍💼", "Casual": "Casual 🚲"}
-        df_f["member_type_display"] = df_f["member_type"].astype(str).map(_map).fillna(df_f["member_type"].astype(str))
+        df["member_type_display"] = df["member_type"].astype(str).map(_map).fillna(df["member_type"].astype(str))
 
     MEMBER_LEGEND_TITLE = globals().get("MEMBER_LEGEND_TITLE", "Member type")
 
@@ -2790,18 +2665,18 @@ elif (
 
     c4, c5 = st.columns(2)
     with c4:
-        stack_by_member = st.checkbox("Stack by Member Type", value=("member_type_display" in df_f.columns))
+        stack_by_member = st.checkbox("Stack by Member Type", value=("member_type_display" in df.columns))
     with c5:
         wx_split = st.selectbox(
             "Weather split",
             ["None", "Wet vs Dry", "Temp bands (Cold/Mild/Hot)"],
-            index=0 if ("wet_day" not in df_f.columns and "avg_temp_c" not in df_f.columns) else 1
+            index=0 if ("wet_day" not in df.columns and "avg_temp_c" not in df.columns) else 1
         )
 
     st.markdown("---")
 
     # ── Prep base aggregations
-    base = df_f.copy()
+    base = df.copy()
     base["station"] = base["start_station_name"].astype(str)
 
     # Weather split columns (optional)
@@ -2812,10 +2687,8 @@ elif (
     elif wx_split.startswith("Temp") and "avg_temp_c" in base.columns:
         wx_col = "temp_band"
         base[wx_col] = pd.cut(
-            base["avg_temp_c"],
-            bins=[-100, 5, 20, 200],
-            labels=["Cold <5°C", "Mild 5–20°C", "Hot >20°C"],
-            include_lowest=True
+            base["avg_temp_c"], bins=[-100, 5, 20, 200],
+            labels=["Cold <5°C", "Mild 5–20°C", "Hot >20°C"], include_lowest=True
         )
 
     # Member split (optional)
@@ -2830,7 +2703,7 @@ elif (
     small = base[base["station"].isin(keep)].copy()
 
     # Share calculation helper
-    def _maybe_to_share(df_grp, val_col="rides", by_cols=None):
+    def _to_share(df_grp: pd.DataFrame, val_col="value", by_cols: list[str] | None = None) -> pd.DataFrame:
         if metric == "Share %":
             if not by_cols:
                 total = df_grp[val_col].sum()
@@ -2845,17 +2718,17 @@ elif (
         by = ["station"]
         if wx_col: by.append(wx_col)
         if mcol:   by.append(mcol)
+
         g = small.groupby(by).size().rename("value").reset_index()
 
-        # Share %
-        share_keys = []
+        share_keys: list[str] = []
         if wx_col: share_keys.append(wx_col)
         if mcol:   share_keys.append(mcol)
-        g = _maybe_to_share(g, val_col="value", by_cols=share_keys)
+        g = _to_share(g, val_col="value", by_cols=share_keys or None)
 
-        # Build label and chart
         xlab = "Share (%)" if metric == "Share %" else "Rides (count)"
         color = mcol if mcol else wx_col
+
         fig = px.bar(
             g, x="station", y="value", color=color, barmode=("stack" if color else "relative"),
             labels={"station": "Station", "value": xlab, (color or ""): (MEMBER_LEGEND_TITLE if color == mcol else "Weather")},
@@ -2882,15 +2755,15 @@ elif (
             by = ["month", "station"]
             if wx_col: by.append(wx_col)
             if mcol:   by.append(mcol)
+
             g = small.groupby(by).size().rename("value").reset_index()
 
-            # Share within each month (and weather/member group, if chosen)
             share_keys = ["month"]
             if wx_col: share_keys.append(wx_col)
             if mcol:   share_keys.append(mcol)
-            g = _maybe_to_share(g, val_col="value", by_cols=share_keys)
+            g = _to_share(g, val_col="value", by_cols=share_keys)
 
-            # If too many stations for a line chart, fallback to heatmap
+            # ≤10 stations and no splits → simple line; else heatmap
             if len(keep) <= 10 and not wx_col and not mcol:
                 fig = px.line(
                     g, x="month", y="value", color="station", markers=True,
@@ -2901,13 +2774,11 @@ elif (
             else:
                 mat = (
                     g.pivot_table(index="station", columns="month", values="value", aggfunc="sum")
-                    .loc[leaderboard["station"]]  # keep top order
+                    .loc[leaderboard["station"]]
                     .fillna(0)
                 )
-                fig = px.imshow(
-                    mat, aspect="auto", origin="lower",
-                    labels=dict(color=("Share (%)" if metric == "Share %" else "Rides"))
-                )
+                fig = px.imshow(mat, aspect="auto", origin="lower",
+                                labels=dict(color=("Share (%)" if metric == "Share %" else "Rides")))
                 fig.update_layout(height=600, title="Monthly pattern — station × month")
                 st.plotly_chart(fig, use_container_width=True)
 
@@ -2921,11 +2792,10 @@ elif (
             if mcol:   by.append(mcol)
             g = small.groupby(by).size().rename("value").reset_index()
 
-            # Share within each hour (and weather/member group, if chosen)
             share_keys = ["hour"]
             if wx_col: share_keys.append(wx_col)
             if mcol:   share_keys.append(mcol)
-            g = _maybe_to_share(g, val_col="value", by_cols=share_keys)
+            g = _to_share(g, val_col="value", by_cols=share_keys)
 
             mat = (
                 g.pivot_table(index="station", columns="hour", values="value", aggfunc="sum")
@@ -2933,34 +2803,28 @@ elif (
                 .reindex(columns=range(0, 24))
                 .fillna(0)
             )
-            fig = px.imshow(
-                mat, aspect="auto", origin="lower",
-                labels=dict(color=("Share (%)" if metric == "Share %" else "Rides"))
-            )
+            fig = px.imshow(mat, aspect="auto", origin="lower",
+                            labels=dict(color=("Share (%)" if metric == "Share %" else "Rides")))
             fig.update_xaxes(title_text="Hour of day")
             fig.update_yaxes(title_text="Station")
             fig.update_layout(height=600, title="Hourly pattern — station × hour")
             st.plotly_chart(fig, use_container_width=True)
 
     # ───────────────────────── Map of Top Stations ─────────────────────────
-    # Use start_lat/lng medians; scale radius by rides
-    if {"start_lat", "start_lng"}.issubset(df_f.columns):
+    if {"start_lat", "start_lng"}.issubset(df.columns):
         st.subheader("🗺️ Map — top stations sized by volume")
         import pydeck as pdk
 
         coords = (
-            df_f.groupby("start_station_name")[["start_lat", "start_lng"]]
-            .median().rename(columns={"start_lat": "lat", "start_lng": "lon"})
+            df.groupby("start_station_name")[["start_lat", "start_lng"]]
+              .median().rename(columns={"start_lat": "lat", "start_lng": "lon"})
         )
         geo = leaderboard.join(coords, on="station", how="left").dropna(subset=["lat", "lon"]).copy()
 
         if len(geo):
             scale = st.slider("Bubble scale", 8, 40, 16)
-            # radius: 60m base + sqrt(rides) scaling (safe for zeros)
             vmax = float(geo["rides"].max())
             geo["radius"] = (60 + scale * (np.sqrt(geo["rides"]) / np.sqrt(vmax if vmax > 0 else 1)) * 100).astype(float)
-
-            # color as list-of-lists (categorical-safe)
             geo["color"] = [[37, 99, 235, 200]] * len(geo)
 
             view_state = pdk.ViewState(
@@ -2990,10 +2854,9 @@ elif (
     st.subheader("🔎 Station deep-dive")
     picked = st.selectbox("Pick a station", leaderboard["station"].tolist() if len(leaderboard) else [])
     if picked:
-        focus = df_f[df_f["start_station_name"].astype(str) == picked]
+        focus = df[df["start_station_name"].astype(str) == picked]
         cA, cB, cC = st.columns(3)
 
-        # Hour profile
         with cA:
             if "hour" in focus.columns and not focus.empty:
                 gh = focus.groupby("hour").size().rename("rides").reset_index()
@@ -3002,64 +2865,61 @@ elif (
                 figH.update_layout(height=320, title="Hourly profile")
                 st.plotly_chart(figH, use_container_width=True)
 
-        # Weekday profile
         with cB:
             if "weekday" in focus.columns and not focus.empty:
                 gw = focus.groupby("weekday").size().rename("rides").reset_index()
-                gw["weekday_name"] = gw["weekday"].map({0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"})
+                gw["weekday_name"] = gw["weekday"].map({0:"Mon",1:"Tue",2:"Wed",3:"Thu",4:"Fri",5:"Sat",6:"Sun"})
                 figW = px.bar(gw, x="weekday_name", y="rides",
                               labels={"weekday_name": "Weekday", "rides": "Rides"})
                 figW.update_layout(height=320, title="Weekday profile")
                 st.plotly_chart(figW, use_container_width=True)
 
-        # Wet vs Dry impact (if available)
         with cC:
             if "wet_day" in focus.columns and focus["wet_day"].notna().any():
                 gd = (
                     focus.assign(day_type=lambda x: x["wet_day"].map({0: "Dry", 1: "Wet"}))
-                    .groupby("day_type").size().rename("rides").reset_index()
+                         .groupby("day_type").size().rename("rides").reset_index()
                 )
                 figD = px.bar(gd, x="day_type", y="rides",
                               labels={"day_type": "Day type", "rides": "Rides"})
                 figD.update_layout(height=320, title="Wet vs Dry impact")
                 st.plotly_chart(figD, use_container_width=True)
 
-    # Download current leaderboard
     st.download_button(
         "Download leaderboard (CSV)",
         leaderboard.rename(columns={"rides": "rides_total"}).to_csv(index=False).encode("utf-8"),
         "top_stations_leaderboard.csv", "text/csv"
     )
 
-# ───────────────────────── Station imbalance (arrivals − departures) ─────────────────────────
-elif (
-    page == "Station Imbalance (In vs Out)"
-    or page.startswith("⚖️ Station imbalance")
-    or page.startswith("Station imbalance")
-):
+
+
+# ───────────────────── Page: Station Imbalance (arrivals − departures) ─────────────────────
+
+def page_station_imbalance(df_filtered: pd.DataFrame) -> None:
+    """Show stations with largest net arrivals minus departures, optionally per-day normalized, split by member type, with map."""
     st.header("⚖️ Station imbalance (arrivals − departures)")
 
     need = {"start_station_name", "end_station_name"}
-    if not need.issubset(df_f.columns):
+    if df_filtered is None or df_filtered.empty or not need.issubset(df_filtered.columns):
         st.info("Need start/end station names.")
-        st.stop()
+        return
 
-    # Pretty member labels if only raw exists (optional; safe no-op if missing)
+    # Pretty member labels if only raw exists
+    df = df_filtered.copy()
     mt_col = None
-    if "member_type_display" in df_f.columns:
+    if "member_type_display" in df.columns:
         mt_col = "member_type_display"
-    elif "member_type" in df_f.columns:
+    elif "member_type" in df.columns:
         _map = {"member": "Member 🧑‍💼", "casual": "Casual 🚲", "Member": "Member 🧑‍💼", "Casual": "Casual 🚲"}
-        df_f["member_type_display"] = df_f["member_type"].astype(str).map(_map).fillna(df_f["member_type"].astype(str))
+        df["member_type_display"] = df["member_type"].astype(str).map(_map).fillna(df["member_type"].astype(str))
         mt_col = "member_type_display"
 
-    # ── Controls
+    # Controls
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         mode = st.selectbox("Time slice", ["All", "Weekday", "Weekend", "AM (06–11)", "PM (16–20)"], index=0)
     with c2:
-        normalize = st.selectbox("Normalize", ["None", "Per day (avg in/out)"], index=0,
-                                 help="Per-day uses the `date` column if present.")
+        normalize = st.selectbox("Normalize", ["None", "Per day (avg in/out)"], index=0, help="Uses `date` if available.")
     with c3:
         topK = st.slider("Show top ±K stations", 5, 60, 15, 5)
     with c4:
@@ -3069,28 +2929,31 @@ elif (
     with c5:
         member_split = st.checkbox("Split by member type", value=(mt_col is not None))
     with c6:
-        show_map = st.checkbox("Show map", value={"start_lat", "start_lng"}.issubset(df_f.columns) or {"end_lat", "end_lng"}.issubset(df_f.columns))
+        show_map = st.checkbox(
+            "Show map",
+            value=({"start_lat", "start_lng"}.issubset(df.columns) or {"end_lat", "end_lng"}.issubset(df.columns))
+        )
 
     # Subset by time slice
-    subset = _time_slice(df_f, mode).copy()
+    subset = _time_slice(df, mode).copy()
     if subset.empty:
         st.info("No rides in this time slice.")
-        st.stop()
+        return
 
-    # Ensure strings (avoid categorical weirdness)
+    # Ensure strings
     subset["start_station_name"] = subset["start_station_name"].astype(str)
-    subset["end_station_name"] = subset["end_station_name"].astype(str)
+    subset["end_station_name"]   = subset["end_station_name"].astype(str)
 
-    # ── Core builder
+    # ---- Core builder
     def build_imbalance(df_src: pd.DataFrame) -> pd.DataFrame:
         if normalize == "Per day (avg in/out)" and "date" in df_src.columns:
             dep = (
                 df_src.groupby(["start_station_name", "date"]).size().rename("cnt").reset_index()
-                     .groupby("start_station_name")["cnt"].mean().rename("out").reset_index()
+                      .groupby("start_station_name")["cnt"].mean().rename("out").reset_index()
             )
             arr = (
                 df_src.groupby(["end_station_name", "date"]).size().rename("cnt").reset_index()
-                     .groupby("end_station_name")["cnt"].mean().rename("in").reset_index()
+                      .groupby("end_station_name")["cnt"].mean().rename("in").reset_index()
             )
             to_float = True
         else:
@@ -3103,10 +2966,10 @@ elif (
         s = s.drop(columns=["start_station_name", "end_station_name"])
 
         if to_float:
-            s["in"] = s["in"].fillna(0.0).astype(float)
+            s["in"]  = s["in"].fillna(0.0).astype(float)
             s["out"] = s["out"].fillna(0.0).astype(float)
         else:
-            s["in"] = s["in"].fillna(0).astype(int)
+            s["in"]  = s["in"].fillna(0).astype(int)
             s["out"] = s["out"].fillna(0).astype(int)
 
         s["total"] = s["in"] + s["out"]
@@ -3116,12 +2979,11 @@ elif (
         s["imbalance"] = s["in"] - s["out"]
         return s.sort_values("imbalance", ascending=False).reset_index(drop=True)
 
-    # ── Plot helper
-    def render_bar(df_in: pd.DataFrame, suffix: str = ""):
+    # ---- Plot helper
+    def render_bar(df_in: pd.DataFrame, suffix: str = "") -> pd.DataFrame | None:
         if df_in.empty:
             st.info("Nothing to show with current filters. Lower **Min total traffic** or change the time slice.")
             return None
-
         top_pos = df_in.nlargest(int(topK), "imbalance")
         top_neg = df_in.nsmallest(int(topK), "imbalance")
         biggest = pd.concat([top_pos, top_neg], ignore_index=True)
@@ -3133,40 +2995,38 @@ elif (
             x=biggest["label"],
             y=biggest["imbalance"],
             marker=dict(color=colors),
-            hovertemplate="Station: %{x}<br>IN: %{customdata[0]}<br>OUT: %{customdata[1]}<br>Δ: %{y}<extra></extra>",
             customdata=np.stack([biggest["in"], biggest["out"]], axis=1),
+            hovertemplate="Station: %{x}<br>IN: %{customdata[0]}<br>OUT: %{customdata[1]}<br>Δ: %{y}<extra></extra>",
         ))
-        x_title = ""
         y_title = "Avg Δ (in − out) / day" if normalize.startswith("Per day") else "Δ (in − out)"
         fig.update_layout(
             height=560,
             title=f"Stations with largest net IN (green) / OUT (red) {suffix}".strip(),
-            xaxis_title=x_title,
-            yaxis_title=y_title,
-            margin=dict(l=10, r=10, t=50, b=10),
+            xaxis_title="", yaxis_title=y_title, margin=dict(l=10, r=10, t=50, b=10),
         )
         fig.update_xaxes(tickangle=45, tickfont=dict(size=10))
         st.plotly_chart(fig, use_container_width=True)
         return biggest
 
-    # ── Map helper (uses coords from starts and/or ends)
-    def render_map(df_in: pd.DataFrame, suffix: str = ""):
+    # ---- Map helper
+    def render_map(df_in: pd.DataFrame, suffix: str = "") -> None:
         if not show_map or df_in is None or df_in.empty:
             return
 
-        # Build station coords
+        # Build station coords (from starts and/or ends)
         coords = pd.DataFrame(index=pd.Index(df_in["station"].unique(), name="station"))
-        if {"start_lat", "start_lng"}.issubset(df_f.columns):
-            coords_s = df_f.groupby("start_station_name")[["start_lat", "start_lng"]].median()
-            coords_s.columns = ["lat", "lon"]
+        if {"start_lat", "start_lng"}.issubset(df.columns):
+            coords_s = df.groupby("start_station_name")[["start_lat", "start_lng"]].median().rename(
+                columns={"start_lat": "lat", "start_lng": "lon"}
+            )
             coords = coords.join(coords_s.rename_axis("station"), how="left")
-        if {"end_lat", "end_lng"}.issubset(df_f.columns):
-            coords_e = df_f.groupby("end_station_name")[["end_lat", "end_lng"]].median()
-            coords_e.columns = ["lat", "lon"]
+        if {"end_lat", "end_lng"}.issubset(df.columns):
+            coords_e = df.groupby("end_station_name")[["end_lat", "end_lng"]].median().rename(
+                columns={"end_lat": "lat", "end_lng": "lon"}
+            )
             coords = coords.combine_first(coords_e.rename_axis("station"))
 
-        geo = df_in.set_index("station").join(coords, how="left").reset_index()
-        geo = geo.dropna(subset=["lat", "lon"])
+        geo = df_in.set_index("station").join(coords, how="left").reset_index().dropna(subset=["lat", "lon"])
         if geo.empty:
             st.info("No coordinates for the selected stations.")
             return
@@ -3176,50 +3036,38 @@ elif (
         vmax = float(np.abs(geo["imbalance"]).max())
         suffix_key = "".join(ch for ch in str(suffix) if ch.isalnum()).lower() or "all"
         scale = st.slider("Map bubble scale", 1, 15, 5, key=f"imb_map_scale_{suffix_key}")
-        geo["radius"] = (60 + scale * (np.sqrt(np.abs(geo["imbalance"])) / np.sqrt(vmax if vmax > 0 else 1)) * 120).astype(float)
-        geo["color"] = [[34, 197, 94, 210] if v >= 0 else [220, 38, 38, 210] for v in geo["imbalance"].to_numpy()]
 
-        # ASCII-safe names for tooltip
+        geo["radius"] = (60 + scale * (np.sqrt(np.abs(geo["imbalance"])) / np.sqrt(vmax if vmax > 0 else 1)) * 120).astype(float)
+        geo["color"]  = [[34, 197, 94, 210] if v >= 0 else [220, 38, 38, 210] for v in geo["imbalance"].to_numpy()]
+
         def ascii_safe(s: pd.Series) -> pd.Series:
             return s.astype(str).str.normalize("NFKD").str.encode("ascii", errors="ignore").str.decode("ascii")
         geo["name_s"] = ascii_safe(geo["station"])
 
-        tooltip = {
-            "html": "<b>{name_s}</b><br>IN: {in}<br>OUT: {out}<br>&Delta;: {imbalance}",
-            "style": {"backgroundColor": "rgba(17,17,17,0.85)", "color": "white"},
-        }
+        tooltip = {"html": "<b>{name_s}</b><br>IN: {in}<br>OUT: {out}<br>&Delta;: {imbalance}",
+                   "style": {"backgroundColor": "rgba(17,17,17,0.85)", "color": "white"}}
 
         view_state = pdk.ViewState(
-            latitude=float(geo["lat"].median()),
-            longitude=float(geo["lon"].median()),
+            latitude=float(geo["lat"].median()), longitude=float(geo["lon"].median()),
             zoom=11, pitch=0, bearing=0
         )
-
         layer = pdk.Layer(
-            "ScatterplotLayer",
-            data=geo,
-            get_position="[lon, lat]",
-            get_radius="radius",
-            get_fill_color="color",
-            pickable=True,
-            auto_highlight=True,
+            "ScatterplotLayer", data=geo,
+            get_position="[lon, lat]", get_radius="radius", get_fill_color="color",
+            pickable=True, auto_highlight=True,
         )
-        deck = pdk.Deck(
-            layers=[layer],
-            initial_view_state=view_state,
-            map_style="mapbox://styles/mapbox/dark-v11",
-            tooltip=tooltip,
-        )
+        deck = pdk.Deck(layers=[layer], initial_view_state=view_state,
+                        map_style="mapbox://styles/mapbox/dark-v11", tooltip=tooltip)
         st.subheader("🗺️ Map — stations sized by |Δ| and colored by sign" + (f" {suffix}" if suffix else ""))
         st.pydeck_chart(deck)
 
-    # ── Render (split or not)
+    # ---- Render (split or combined)
     if member_split and (mt_col is not None) and (mt_col in subset.columns):
         tabs = st.tabs(["Member 🧑‍💼", "Casual 🚲", "All"])
         segments = [
             ("Member 🧑‍💼", subset[subset[mt_col].astype(str) == "Member 🧑‍💼"]),
-            ("Casual 🚲", subset[subset[mt_col].astype(str) == "Casual 🚲"]),
-            ("All", subset),
+            ("Casual 🚲",   subset[subset[mt_col].astype(str) == "Casual 🚲"]),
+            ("All",         subset),
         ]
         for (label, seg_df), tab in zip(segments, tabs):
             with tab:
@@ -3241,35 +3089,38 @@ elif (
         with st.expander("Preview & Download"):
             st.dataframe(m.sort_values("imbalance", ascending=False).head(120), use_container_width=True)
             st.download_button(
-                "Download imbalance CSV",
-                m.to_csv(index=False).encode("utf-8"),
-                "station_imbalance.csv",
-                "text/csv",
+                "Download imbalance CSV", m.to_csv(index=False).encode("utf-8"),
+                "station_imbalance.csv", "text/csv",
             )
         render_map(biggest)
 
     st.caption("Tip: Use **Time slice**, **Normalize → Per day**, and **Min total traffic** to isolate AM vs PM redistribution cleanly.")
 
+# ───────────────────── Page: Pareto (Share of rides) ─────────────────────
 
-elif (
-    page == "Pareto: Share of Rides"
-    or page.startswith("📈 Pareto")
-):
+def page_pareto(df_filtered: pd.DataFrame) -> None:
+    """Pareto concentration of rides across start/end stations, with per-day normalization, member filter, and Lorenz option."""
     st.header("📈 Pareto curve — demand concentration")
 
-    if "start_station_name" not in df_f.columns and "end_station_name" not in df_f.columns:
-        st.warning("Need `start_station_name` or `end_station_name`.")
-        st.stop()
+    if df_filtered is None or df_filtered.empty:
+        st.info("No data in current selection.")
+        return
 
-    # ── Controls
+    if "start_station_name" not in df_filtered.columns and "end_station_name" not in df_filtered.columns:
+        st.warning("Need `start_station_name` or `end_station_name`.")
+        return
+
+    # ---- Controls
     c0, c1, c2, c3 = st.columns(4)
     with c0:
         basis = st.selectbox("Count rides by", ["Start stations", "End stations"], index=0)
     with c1:
         mode = st.selectbox("Time slice", ["All", "Weekday", "Weekend", "AM (06–11)", "PM (16–20)"], index=0)
     with c2:
-        normalize = st.selectbox("Normalize counts", ["Total rides", "Per day (avg/station)"], index=0,
-                                 help="Per-day uses the `date` column if present.")
+        normalize = st.selectbox(
+            "Normalize counts", ["Total rides", "Per day (avg/station)"], index=0,
+            help="Per-day uses the `date` column if present."
+        )
     with c3:
         target = st.slider("Target cumulative share", 50, 95, 80, 1)
 
@@ -3281,10 +3132,13 @@ elif (
     with c6:
         show_lorenz = st.checkbox("Show Lorenz curve (cum. stations vs cum. rides)", value=False)
 
-    # ── Subset by time slice and member
-    subset = _time_slice(df_f, mode).copy()
+    # ---- Subset by time slice + member filter
+    subset = _time_slice(df_filtered, mode).copy()
+    if subset.empty:
+        st.info("No rides for current filters.")
+        return
 
-    # Ensure pretty member labels if you only have raw member_type
+    # Pretty member labels if you only have raw member_type (non-destructive)
     if "member_type_display" not in subset.columns and "member_type" in subset.columns:
         _map = {"member": "Member 🧑‍💼", "casual": "Casual 🚲", "Member": "Member 🧑‍💼", "Casual": "Casual 🚲"}
         subset["member_type_display"] = subset["member_type"].astype(str).map(_map).fillna(subset["member_type"].astype(str))
@@ -3296,57 +3150,65 @@ elif (
             subset = subset[subset["member_type"].astype(str) == "casual"]
 
     if subset.empty:
-        st.info("No rides for current filters.")
-        st.stop()
+        st.info("No rides after member filter.")
+        return
 
-    # Pick column to count
+    # ---- Pick station column and build totals
     station_col = "start_station_name" if basis.startswith("Start") else "end_station_name"
     if station_col not in subset.columns:
         st.warning(f"`{station_col}` not found.")
-        st.stop()
-
+        return
     subset[station_col] = subset[station_col].astype(str)
 
-    # ── Build station totals
     if normalize == "Per day (avg/station)" and "date" in subset.columns:
         per_day = (
-            subset.groupby([station_col, "date"])
-            .size()
-            .rename("rides_day")
-            .reset_index()
+            subset.groupby([station_col, "date"]).size().rename("rides_day").reset_index()
         )
         totals = per_day.groupby(station_col)["rides_day"].mean().rename("rides")
     else:
         totals = subset.groupby(station_col).size().rename("rides")
 
-    # Filter tiny stations if requested
     if min_rides > 0:
         totals = totals[totals >= float(min_rides)]
 
     if totals.empty:
         st.info("No stations left after filtering. Lower **Min rides**.")
-        st.stop()
+        return
 
     totals = totals.sort_values(ascending=False)
     counts = totals.to_numpy(dtype=float)
     n = len(counts)
     cum_share = np.cumsum(counts) / counts.sum()
 
-    # Find rank to hit target %
+    # ---- Hit target share
     target_frac = target / 100.0
     idx_target = int(np.searchsorted(cum_share, target_frac, side="left"))
     rank_needed = min(max(idx_target + 1, 1), n)  # 1-based
 
-    # Gini & HHI diagnostics
-    # Gini (0=equal, 1=concentrated)
-    x = np.sort(counts)  # ascending
-    cum_x = np.cumsum(x)
-    gini = 1 - (2 / (n - 1)) * (n - (cum_x.sum() / cum_x[-1]))
-    # HHI (0–1, higher = concentrated). Use shares^2
-    shares = counts / counts.sum()
-    hhi = float(np.sum(shares ** 2))
+    # ---- Diagnostics: Gini & HHI (robust)
+    def _gini_from_counts(x: np.ndarray) -> float:
+        """Gini (0=equal, 1=concentrated) for nonnegative counts."""
+        x = np.asarray(x, dtype=float)
+        x = x[x >= 0]
+        if x.size == 0 or x.sum() == 0:
+            return 0.0
+        x_sorted = np.sort(x)
+        cumx = np.cumsum(x_sorted)
+        # G = 1 - 2 * (area under Lorenz); area via trapezoids on cum shares
+        lor = cumx / cumx[-1]
+        area = (lor[:-1] + lor[1:]).sum() / (2 * (x.size - 1))
+        return float(1 - 2 * area)
 
-    # ── Plot
+    def _hhi_from_counts(x: np.ndarray) -> float:
+        """Herfindahl–Hirschman Index (0–1), higher = more concentrated."""
+        s = x / x.sum() if x.sum() > 0 else np.zeros_like(x, dtype=float)
+        return float(np.sum(s ** 2))
+
+    gini = _gini_from_counts(counts)
+    hhi = _hhi_from_counts(counts)
+    shares = counts / counts.sum()
+
+    # ---- Plot
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=np.arange(1, n + 1),
@@ -3355,7 +3217,6 @@ elif (
         name="Cumulative share",
         hovertemplate="Rank: %{x}<br>Cumulative share: %{y:.1%}<extra></extra>",
     ))
-    # Target lines
     fig.add_hline(y=target_frac, line_dash="dot")
     fig.add_vline(x=rank_needed, line_dash="dot")
     fig.add_annotation(
@@ -3365,39 +3226,27 @@ elif (
         bgcolor="rgba(0,0,0,0.05)"
     )
 
-    # Lorenz (optional): cumulative stations share on X, cumulative rides on Y
     if show_lorenz:
-        x_lor = np.linspace(0, 1, n, endpoint=True)  # cum stations share
-        y_lor = np.cumsum(np.sort(shares))  # cum rides share ascending
+        # Lorenz: cumulative stations share on X (ascending size), cumulative rides on Y
+        x_lor = np.linspace(0, 1, n, endpoint=True)
+        y_lor = np.cumsum(np.sort(shares))
         fig.add_trace(go.Scatter(
-            x=x_lor * n,  # show same X scale as rank for easier reading
-            y=y_lor,
-            mode="lines",
-            name="Lorenz (asc by size)",
+            x=x_lor * n, y=y_lor, mode="lines", name="Lorenz (asc by size)",
             hovertemplate="Cum stations: %{x:.0f}<br>Cum rides: %{y:.1%}<extra></extra>",
         ))
-        # Equality line (diagonal)
         fig.add_trace(go.Scatter(
-            x=x_lor * n, y=x_lor,
-            mode="lines", name="Equality", line=dict(dash="dash"),
-            hoverinfo="skip",
+            x=x_lor * n, y=x_lor, mode="lines", name="Equality", line=dict(dash="dash"), hoverinfo="skip",
         ))
 
-    # Axes + layout
     fig.update_layout(
         height=520,
         margin=dict(l=20, r=20, t=40, b=40),
         title=f"Demand concentration (Pareto) — {basis.lower()}",
     )
-    friendly_axis(
-        fig,
-        x="Stations (ranked by rides)",
-        y="Cumulative share of rides",
-        title=None
-    )
+    friendly_axis(fig, x="Stations (ranked by rides)", y="Cumulative share of rides", title=None)
     st.plotly_chart(fig, use_container_width=True)
 
-    # ── Stats panel
+    # ---- Stats
     cA, cB, cC, cD = st.columns(4)
     with cA:
         st.metric("Stations to reach target", f"{rank_needed:,} / {n:,}")
@@ -3408,7 +3257,7 @@ elif (
     with cD:
         st.metric("HHI (0–1)", f"{hhi:.3f}")
 
-    # ── Download
+    # ---- Download
     out = totals.reset_index().rename(columns={station_col: "station", "rides": "value"})
     out["rank"] = np.arange(1, len(out) + 1)
     out["cum_share"] = cum_share
@@ -3421,173 +3270,249 @@ elif (
 
     st.caption("Tip: if the curve is very steep, a small set of hubs carries most demand—prioritize rebalancing, maintenance, and inventory there.")
 
-elif page == "Weekday × Hour Heatmap":
+# ───────────── Page: Weekday × Hour Heatmap ─────────────
+
+def page_weekday_hour_heatmap(df_filtered: pd.DataFrame) -> None:
+    """Temporal load heatmap (weekday × start hour) with scaling, binning, smoothing, presets, and member facets."""
     st.header("⏰ Temporal load — weekday × start hour")
 
-    if not {"started_at", "hour", "weekday"}.issubset(df_f.columns):
+    need = {"started_at", "hour", "weekday"}
+    if df_filtered is None or df_filtered.empty or not need.issubset(df_filtered.columns):
         st.info("Need `started_at` parsed into `hour` and `weekday` (done in load_data).")
+        return
+
+    # ---- Controls ----
+    c0, c1, c2, c3, c4, c5 = st.columns(6)
+    with c0:
+        mode = st.selectbox("Time slice", ["All", "Weekday", "Weekend", "AM (06–11)", "PM (16–20)"], index=0)
+    with c1:
+        scale = st.selectbox("Scale", ["Absolute", "Row %", "Column %", "Z-score"], index=0,
+                             help="Row % shows distribution within a weekday; Column % shows distribution within an hour.")
+    with c2:
+        hour_bin = st.slider("Hour bin size", 1, 3, 1, help="Group hours into 1/2/3-hour buckets.")
+    with c3:
+        smooth = st.checkbox("Smooth across hours", value=False, help="Moving average per weekday (visual only).")
+    with c4:
+        wk_preset = st.selectbox("Preset", ["All days", "Weekdays only", "Weekend only"], index=0)
+    with c5:
+        member_mode = st.selectbox("Member view", ["All", "Member only", "Casual only", "Facet by Member Type"], index=0)
+
+    # Base subset using global time-slice helper
+    subset = _time_slice(df_filtered, mode).copy()
+
+    # Apply day-of-week preset (stacks on sidebar filter + mode)
+    if wk_preset == "Weekdays only":
+        subset = subset[subset["weekday"].isin([0, 1, 2, 3, 4])]
+    elif wk_preset == "Weekend only":
+        subset = subset[subset["weekday"].isin([5, 6])]
+
+    # Member filter / facet
+    facet = False
+    if member_mode == "Member only" and "member_type" in subset.columns:
+        subset = subset[subset["member_type"].astype(str) == "member"]
+    elif member_mode == "Casual only" and "member_type" in subset.columns:
+        subset = subset[subset["member_type"].astype(str) == "casual"]
+    elif member_mode == "Facet by Member Type" and "member_type_display" in subset.columns:
+        facet = True
+
+    if subset.empty:
+        st.info("No rows for current filters.")
+        return
+
+    # ---- Heatmap renderer ----
+    def _render_heat(mat: pd.DataFrame, title: str):
+        if mat.empty:
+            st.info("Not enough data to render heatmap.")
+            return
+        # Optional smoothing (per weekday across hours)
+        if smooth:
+            mat = _smooth_by_hour(mat, k=3)
+
+        # Relabel Y-axis to weekday names
+        mat_display = mat.copy()
+        mat_display.index = _weekday_name(mat_display.index)
+
+        # Use imshow for speed; annotate hover smartly
+        fig = px.imshow(
+            mat_display,
+            aspect="auto", origin="lower",
+            labels=dict(x="Hour of day", y="Day of week", color=("Value" if scale == "Absolute" else scale)),
+            text_auto=False, color_continuous_scale="Turbo" if scale == "Z-score" else "Viridis"
+        )
+        fig.update_xaxes(
+            tickmode="array",
+            tickvals=list(range(len(mat.columns))),
+            ticktext=[f"{h:02d}:00" for h in mat.columns]
+        )
+        fig.update_yaxes(
+            tickmode="array",
+            tickvals=list(range(len(mat.index))),
+            ticktext=mat_display.index.tolist()
+        )
+        fig.update_layout(height=600, title=title, margin=dict(l=20, r=20, t=50, b=50))
+
+        # Hover text
+        hover = "<b>%{y}</b> @ <b>%{x}</b><br>Value: %{z}"
+        if scale in ("Row %", "Column %"):
+            hover = "<b>%{y}</b> @ <b>%{x}</b><br>Share: %{z:.1f}%"
+        fig.update_traces(hovertemplate=hover)
+
+        # Peak annotation (only for Absolute / Row %)
+        if scale in ("Absolute", "Row %"):
+            _ = _add_peak_annotation(fig, mat)
+
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ---- Build & render ----
+    if facet:
+        cL, cR = st.columns(2)
+        for label, col in [("Member 🧑‍💼", cL), ("Casual 🚲", cR)]:
+            _sub = subset[subset["member_type"].astype(str).eq("member" if "Member" in label else "casual")]
+            mat = _make_heat_grid(_sub, hour_bin=hour_bin, scale=scale)
+            with col:
+                _render_heat(mat, f"Weekday × Hour — {label}")
     else:
-        # ---- Controls ----
-        c0, c1, c2, c3, c4, c5 = st.columns(6)
-        with c0:
-            mode = st.selectbox("Time slice", ["All", "Weekday", "Weekend", "AM (06–11)", "PM (16–20)"], index=0)
-        with c1:
-            scale = st.selectbox("Scale", ["Absolute", "Row %", "Column %", "Z-score"], index=0,
-                                 help="Row % shows distribution within a weekday; Column % shows distribution within an hour.")
-        with c2:
-            hour_bin = st.slider("Hour bin size", 1, 3, 1, help="Group hours into 1/2/3-hour buckets.")
-        with c3:
-            smooth = st.checkbox("Smooth across hours", value=False, help="Moving average per weekday (visual only).")
-        with c4:
-            wk_preset = st.selectbox("Preset", ["All days", "Weekdays only", "Weekend only"], index=0)
-        with c5:
-            member_mode = st.selectbox("Member view", ["All", "Member only", "Casual only", "Facet by Member Type"], index=0)
+        mat = _make_heat_grid(subset, hour_bin=hour_bin, scale=scale)
+        _render_heat(mat, "Weekday × Hour — All riders")
 
-        # Base subset using global time-slice helper
-        subset = _time_slice(df_f, mode).copy()
+    # ---- Marginal profiles ----
+    st.subheader("Marginal profiles")
+    grid_all = _make_heat_grid(subset, hour_bin=hour_bin, scale="Absolute")
+    if not grid_all.empty:
+        # Hourly totals (columns)
+        hourly = grid_all.sum(axis=0).rename("rides").reset_index()
+        hourly = hourly.rename(columns={hourly.columns[0]: "hour"})
+        hourly["hour"] = pd.to_numeric(hourly["hour"], errors="coerce").fillna(0).astype(int)
+        f1 = px.line(hourly, x="hour", y="rides", markers=True,
+                     labels={"hour": "Hour of day", "rides": "Rides"})
+        f1.update_layout(height=300, title="Hourly total rides")
+        st.plotly_chart(f1, use_container_width=True)
 
-        # Apply day-of-week preset (stacks on sidebar filter + mode)
-        if wk_preset == "Weekdays only":
-            subset = subset[subset["weekday"].isin([0, 1, 2, 3, 4])]
-        elif wk_preset == "Weekend only":
-            subset = subset[subset["weekday"].isin([5, 6])]
+        # Weekday totals (rows)
+        weekday = grid_all.sum(axis=1).rename("rides").reset_index()
+        weekday = weekday.rename(columns={weekday.columns[0]: "weekday"})
+        weekday["weekday_name"] = _weekday_name(weekday["weekday"])
+        f2 = px.bar(weekday, x="weekday_name", y="rides",
+                    labels={"weekday_name": "Weekday", "rides": "Rides"})
+        f2.update_layout(height=300, title="Weekday total rides")
+        st.plotly_chart(f2, use_container_width=True)
 
-        # Member filter / facet
-        facet = False
-        if member_mode == "Member only" and "member_type" in subset.columns:
-            subset = subset[subset["member_type"].astype(str) == "member"]
-        elif member_mode == "Casual only" and "member_type" in subset.columns:
-            subset = subset[subset["member_type"].astype(str) == "casual"]
-        elif member_mode == "Facet by Member Type" and "member_type_display" in subset.columns:
-            facet = True
+    # ---- Wet vs Dry comparison (if available) ----
+    if "wet_day" in subset.columns and subset["wet_day"].notna().any():
+        st.subheader("Wet vs Dry comparison")
+        cA, cB = st.columns(2)
+        dry = subset[subset["wet_day"] == 0]
+        wet = subset[subset["wet_day"] == 1]
+        mat_dry = _make_heat_grid(dry, hour_bin=hour_bin, scale=scale)
+        mat_wet = _make_heat_grid(wet, hour_bin=hour_bin, scale=scale)
+        with cA:
+            _render_heat(mat_dry, "Dry days")
+        with cB:
+            _render_heat(mat_wet, "Wet days")
 
-        # Guard
-        if subset.empty:
-            st.info("No rows for current filters.")
-            st.stop()
+    st.caption("Tips: try Row % to see within-day timing; Column % to see which days dominate each hour; Z-score to highlight anomalies.")
 
-        # ---- Build main heatmap(s) ----
-        def _render_heat(mat: pd.DataFrame, title: str):
-            if mat.empty:
-                st.info("Not enough data to render heatmap.")
-                return
-            # Smoothing (optional)
-            if smooth:
-                mat = _smooth_by_hour(mat, k=3)
+# ───────────────────── Page: Recommendations ─────────────────────
 
-            # Relabel Y-axis to weekday names
-            mat_display = mat.copy()
-            mat_display.index = _weekday_name(mat_display.index)
-
-            # Imshow
-            fig = px.imshow(
-                mat_display,
-                aspect="auto", origin="lower",
-                labels=dict(x="Hour of day", y="Day of week", color=("Value" if scale == "Absolute" else scale)),
-                text_auto=False, color_continuous_scale="Turbo" if scale == "Z-score" else "Viridis"
-            )
-
-            # Ticks: show real hour values (bin centers)
-            fig.update_xaxes(
-                tickmode="array",
-                tickvals=list(range(len(mat.columns))),
-                ticktext=[f"{h:02d}:00" for h in mat.columns]
-            )
-            fig.update_yaxes(
-                tickmode="array",
-                tickvals=list(range(len(mat.index))),
-                ticktext=mat_display.index.tolist()
-            )
-            fig.update_layout(height=600, title=title, margin=dict(l=20, r=20, t=50, b=50))
-
-            # Hover with raw value and (if % scale) show formatted %
-            hover = "<b>%{y}</b> @ <b>%{x}</b><br>Value: %{z}"
-            if scale in ("Row %", "Column %"):
-                hover = "<b>%{y}</b> @ <b>%{x}</b><br>Share: %{z:.1f}%"
-            fig.update_traces(hovertemplate=hover)
-
-            # Peak annotation (only for Absolute / Row %)
-            if scale in ("Absolute", "Row %"):
-                fig = _add_peak_annotation(fig, mat)
-
-            st.plotly_chart(fig, use_container_width=True)
-
-        if facet:
-            # Two panels: Member vs Casual
-            cL, cR = st.columns(2)
-            for label, col in [("Member 🧑‍💼", cL), ("Casual 🚲", cR)]:
-                _sub = subset[subset["member_type"].astype(str).eq("member" if "Member" in label else "casual")]
-                mat = _make_heat_grid(_sub, hour_bin=hour_bin, scale=scale)
-                with col:
-                    _render_heat(mat, f"Weekday × Hour — {label}")
-        else:
-            mat = _make_heat_grid(subset, hour_bin=hour_bin, scale=scale)
-            _render_heat(mat, "Weekday × Hour — All riders")
-
-        # ---- Marginal profiles ----
-        st.subheader("Marginal profiles")
-        grid_all = _make_heat_grid(subset, hour_bin=hour_bin, scale="Absolute")
-        if not grid_all.empty:
-            # Hourly profile
-            hourly = grid_all.sum(axis=0).rename("rides").reset_index().rename(columns={"index": "hour"})
-            hourly["hour"] = hourly["hour"].astype(int)
-            f1 = px.line(hourly, x="hour", y="rides", markers=True, labels={"hour": "Hour of day", "rides": "Rides"})
-            f1.update_layout(height=300, title="Hourly total rides")
-            st.plotly_chart(f1, use_container_width=True)
-
-            # Weekday profile
-            weekday = grid_all.sum(axis=1).rename("rides").reset_index().rename(columns={0: "weekday"})
-            weekday["weekday_name"] = _weekday_name(weekday["weekday"])
-            f2 = px.bar(weekday, x="weekday_name", y="rides", labels={"weekday_name": "Weekday", "rides": "Rides"})
-            f2.update_layout(height=300, title="Weekday total rides")
-            st.plotly_chart(f2, use_container_width=True)
-
-        # ---- Wet vs Dry comparison (if available) ----
-        if "wet_day" in subset.columns and subset["wet_day"].notna().any():
-            st.subheader("Wet vs Dry comparison")
-            cA, cB = st.columns(2)
-            dry = subset[subset["wet_day"] == 0]
-            wet = subset[subset["wet_day"] == 1]
-            mat_dry = _make_heat_grid(dry, hour_bin=hour_bin, scale=scale)
-            mat_wet = _make_heat_grid(wet, hour_bin=hour_bin, scale=scale)
-            with cA: _render_heat(mat_dry, "Dry days")
-            with cB: _render_heat(mat_wet, "Wet days")
-
-        st.caption("Tips: try Row % to see within-day timing; Column % to see which days dominate each hour; Z-score to highlight anomalies.")
-
-
-elif page == "Recommendations":
+def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame | None) -> None:
+    """Conclusion + actionable recommendations, with light, defensible context KPIs."""
     st.header("🚀 Conclusion & Recommendations")
-    st.markdown("### ")
-    st.markdown("""
-### Recommendations (4–8 weeks)
 
-1) **Scale hotspot capacity**  
-   - 🧱 Portable/temporary docks where feasible.  
-   - 🎯 Target **≥85% fill at open (AM)** and **≥70% before PM peak** at top-20 stations.
+    # --- Small context KPIs (optional, shown if computable) ---
+    ctx = compute_core_kpis(df_filtered, daily_filtered) if df_filtered is not None else {}
+    total_txt = kfmt(ctx.get("total_rides")) if ctx.get("total_rides") is not None else "—"
+    avg_txt   = kfmt(ctx.get("avg_day"))     if ctx.get("avg_day")     is not None else "—"
+    corr_txt  = f"{ctx.get('corr_tr'):+.3f}" if ctx.get("corr_tr")     is not None else "—"
 
-2) **Predictive stocking: weather + weekday**  
-   - 📈 Simple regression/rules for **next-day dock targets** by station.  
-   - 🌡️ Escalate stocking when **forecast highs ≥ 22 °C**.
+    c0, c1, c2 = st.columns(3)
+    with c0: st.metric("Total trips (selection)", total_txt)
+    with c1: st.metric("Avg rides/day", avg_txt)
+    with c2: st.metric("Temp ↔ Rides (r)", corr_txt)
 
-3) **Corridor-aligned rebalancing**  
-   - 🚚 Stage trucks at **repeated high-flow endpoints**; run **loop routes**.
+    st.markdown("---")
 
-4) **Rider incentives**  
-   - 🎟️ Credits for returns to **under-stocked docks** during commute windows.
+    # --- Recommendations (4–8 weeks) ---
+    st.markdown("### Recommendations (4–8 weeks)")
 
-**KPIs**  
-- ⛔ **Dock-out rate** < 5% at top-20 stations during peaks  
-- 📉 **Empty/Full dock complaints** ↓ 30% MoM  
-- 🛣️ **Truck miles per rebalanced bike** ↓ 15%  
-- ⏱️ **On-time dock readiness** ≥ 90% (before AM peak)
-""")
+    a, b = st.columns(2)
+    with a:
+        st.markdown(
+            "- **Scale hotspot capacity**  \n"
+            "  🧱 Portable/temporary docks where feasible.  \n"
+            "  🎯 Target **≥85% fill at open (AM)** and **≥70% before PM peak** at top-20 stations."
+        )
+        st.markdown(
+            "- **Predictive stocking: weather × weekday**  \n"
+            "  📈 Simple regression/rules for **next-day dock targets** by station.  \n"
+            "  🌡️ Escalate stocking when **forecast highs ≥ 22 °C**."
+        )
+    with b:
+        st.markdown(
+            "- **Corridor-aligned rebalancing**  \n"
+            "  🚚 Stage trucks at **repeated high-flow endpoints**; run **loop routes**."
+        )
+        st.markdown(
+            "- **Rider incentives**  \n"
+            "  🎟️ Credits for returns to **under-stocked docks** during commute windows."
+        )
+
+    # --- KPIs (clear, measurable) ---
+    st.markdown("**KPIs to track**")
+    k1, k2, k3, k4 = st.columns(4)
+    with k1: st.metric("Dock-out rate @ peaks (top-20)", "< 5%")
+    with k2: st.metric("Empty/Full complaints (MoM)", "−30%")
+    with k3: st.metric("Truck km / rebalanced bike", "−15%")
+    with k4: st.metric("On-time dock readiness", "≥ 90%")
+
     st.markdown("> **Next** — 🧪 Pilot at the top 10 stations for 2 weeks; compare KPIs before/after.")
     st.caption("🧱 Limitations: sample reduced for deployment; no per-dock inventory; events/holidays not modeled.")
 
-    st.markdown("### ")
-    st.markdown("### ")
-    st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
+    # Optional: supporting media
+    with st.expander("Watch a 1-min explainer"):
+        st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
+
+# ────────────────────────────── Page routing (place this after defining all page_* functions) ─────────────────────────────────────
+
+if page == "Intro":
+    page_intro(
+        df_filtered=df_f,
+        daily_filtered=daily_f,
+        date_range=date_range,
+        seasons=seasons,
+        usertype=usertype,
+        hour_range=hour_range,
+        cover_path=cover_path,
+    )
+
+elif page == "Weather vs Bike Usage":
+    page_weather_vs_usage(daily_f)
+
+elif page == "Trip Metrics (Duration • Distance • Speed)":
+    page_trip_metrics(df_f)
+
+elif page == "Member vs Casual Profiles":
+    page_member_vs_casual(df_f)
+
+elif page == "OD Flows — Sankey + Map":
+    page_od_flows(df_f)
+
+elif page == "OD Matrix":
+    page_od_matrix(df_f)
+
+elif page == "Station Popularity":
+    page_station_popularity(df_f)
+
+elif page == "Station Imbalance (In vs Out)":
+    page_station_imbalance(df_f)
+
+elif page == "Pareto: Share of Rides":
+    page_pareto(df_f)
+
+elif page == "Weekday × Hour Heatmap":
+    page_weekday_hour_heatmap(df_f)
+
+elif page == "Recommendations":
+    page_recommendations(df_f, daily_f)
 
 # ────────────────────────────── Footer ─────────────────────────────────────
 st.markdown("---")
