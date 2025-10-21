@@ -1065,6 +1065,28 @@ if _qp_page not in PAGES:
 
 page = st.sidebar.selectbox("📑 Analysis page", PAGES, index=PAGES.index(_qp_page), key="page_select")
 
+# --- Sidebar paging controls (uses your URL state helpers) ---
+idx = PAGES.index(page)
+
+col_prev, col_next = st.sidebar.columns(2)
+prev_clicked = col_prev.button("◀ Prev", use_container_width=True)
+next_clicked = col_next.button("Next ▶", use_container_width=True)
+
+if prev_clicked or next_clicked:
+    new_idx = (idx - 1) % len(PAGES) if prev_clicked else (idx + 1) % len(PAGES)
+    new_page = PAGES[new_idx]
+
+    # preserve all existing query params, just swap the page
+    qp = _qp_get()
+    qp["page"] = new_page
+    _qp_set(qp)
+
+    # rerun to apply
+    try:
+        st.rerun()
+    except Exception:
+        st.experimental_rerun()
+
 # ---------- Primary filters ----------
 date_min = pd.to_datetime(df["date"].min()) if "date" in df.columns else None
 date_max = pd.to_datetime(df["date"].max()) if "date" in df.columns else None
