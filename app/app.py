@@ -1133,52 +1133,99 @@ def _backfill_trip_weather(df_trips: pd.DataFrame, daily_df: pd.DataFrame) -> pd
 df_f = _backfill_trip_weather(df_f, daily_all)
 
 # ────────────────────────────── Pages ──────────────────────────────────────
-if page == "Intro":
+# ────────────────────────────── Page: Intro ──────────────────────────────
+
+def _selection_summary(
+    date_range: tuple | None,
+    seasons: list[str] | None,
+    usertype: str | None,
+    hour_range: tuple[int, int] | None
+) -> str:
+    """Human-friendly summary of current filters."""
+    # Dates
+    if date_range and all(date_range):
+        d0, d1 = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
+        date_str = f"{d0.date()} → {d1.date()}"
+    else:
+        date_str = "—"
+    # Seasons
+    all_seasons = {"Winter","Spring","Summer","Autumn"}
+    if not seasons or set(seasons) == all_seasons:
+        season_str = "All seasons"
+    else:
+        season_str = ", ".join(seasons)
+    # Usertype
+    user_str = "All users" if (usertype in (None, "All")) else str(usertype).title()
+    # Hours
+    if hour_range and len(hour_range) == 2:
+        hr_str = f"{hour_range[0]:02d}:00–{hour_range[1]:02d}:00"
+    else:
+        hr_str = "All day"
+    return f"**Selection:** {date_str} · {season_str} · {user_str} · {hr_str}"
+
+
+def _weather_uplift(daily: pd.DataFrame | None) -> str:
+    """
+    +% uplift for 'comfy' (15–25°C) vs 'extreme' (<5 or >30°C) mean daily rides.
+    Returns pretty string or '—'.
+    """
+    if daily is None or daily.empty or "avg_temp_c" not in daily.columns or "bike_rides_daily" not in daily.columns:
+        return "—"
+    d = daily.dropna(subset=["avg_temp_c", "bike_rides_daily"])
+    if d.empty:
+        return "—"
+    comfy = d.loc[d["avg_temp_c"].between(15, 25, inclusive="both"), "bike_rides_daily"].mean()
+    extreme = d.loc[~d["avg_temp_c"].between(5, 30, inclusive="both"), "bike_rides_daily"].mean()
+    if pd.notnull(comfy) and pd.notnull(extreme) and extreme not in (0, np.nan):
+        return f"{(comfy - extreme) / extreme * 100.0:+.0f}%"
+    return "—"
+
+
+def _weather_coverage(daily: pd.DataFrame | None) -> str:
+    """% of days with usable temperature in the current selection."""
+    if daily is None or daily.empty:
+        return "—"
+    if "avg_temp_c" in daily.columns:
+        cov = 100.0 * daily["avg_temp_c"].notna().mean()
+        return f"{cov:.0f}%"
+    return "0%"
+
+
+def page_intro(
+    df_filtered: pd.DataFrame,
+    daily_filtered: pd.DataFrame | None,
+    *,
+    date_range: tuple | None = None,
+    seasons: list[str] | None = None,
+    usertype: str | None = None,
+    hour_range: tuple[int, int] | None = None,
+    cover_path: Path | None = None
+) -> None:
+    """Intro page: hero, selection summary, KPIs, mini-trend, and overview copy."""
     render_hero_panel()
 
-    # Selection summary (everything below reflects this slice)
-    st.caption(
-        f"**Selection:** {date_range[0]} → {date_range[1]} · "
-        f"{'All seasons' if seasons is None or set(seasons)==set(['Winter','Spring','Summer','Autumn']) else ', '.join(seasons)} · "
-        f"{'All users' if (usertype in (None,'All')) else usertype.title()} · "
-        f"{'All day' if hour_range is None else f'{hour_range[0]:02d}:00–{hour_range[1]:02d}:00'}"
-    )
+    # Selection summary
+    st.caption(_selection_summary(date_range, seasons, usertype, hour_range))
 
-    show_cover(cover_path)
+    # Cover image + attribution
+    if cover_path is not None:
+        show_cover(cover_path)
     st.caption("⚙️ Powered by NYC Citi Bike data • 365 days • Interactive visuals")
 
-    # --- Core KPIs (robust/defensible) ---
-    KPIs = compute_core_kpis(df_f, daily_f)  # total_rides, avg_day, corr_tr
+    # KPIs
+    kpis = compute_core_kpis(df_filtered, daily_filtered)  # total_rides, avg_day, corr_tr
+    weather_str = _weather_uplift(daily_filtered)
+    coverage_str = _weather_coverage(daily_filtered)
 
-    # Weather uplift: comfy (15–25°C) vs extreme (<5 or >30°C)
-    weather_uplift_pct = None
-    if daily_f is not None and not daily_f.empty and "avg_temp_c" in daily_f.columns:
-        d_nonnull = daily_f.dropna(subset=["avg_temp_c", "bike_rides_daily"]).copy()
-        if not d_nonnull.empty:
-            comfy   = d_nonnull.loc[d_nonnull["avg_temp_c"].between(15, 25, inclusive="both"), "bike_rides_daily"].mean()
-            extreme = d_nonnull.loc[~d_nonnull["avg_temp_c"].between(5, 30, inclusive="both"), "bike_rides_daily"].mean()
-            if pd.notnull(comfy) and pd.notnull(extreme) and extreme not in (0, np.nan):
-                weather_uplift_pct = (comfy - extreme) / extreme * 100.0
-    weather_str = f"{weather_uplift_pct:+.0f}%" if weather_uplift_pct is not None else "—"
-
-    # Coverage: % of selected days with usable weather (defensibility for weather KPIs)
-    coverage = "—"
-    if daily_f is not None and not daily_f.empty:
-        if "avg_temp_c" in daily_f.columns:
-            cov = 100.0 * daily_f["avg_temp_c"].notna().mean()
-            coverage = f"{cov:.0f}%"
-        else:
-            coverage = "0%"
-
-    # Peak Season (optional text if you want to keep it handy)
+    # Optional: Peak season text (kept lightweight)
     peak_value, peak_sub = "—", ""
-    if "season" in df_f.columns and daily_f is not None and not daily_f.empty:
-        tmp = daily_f.copy()
-        if "season" not in tmp.columns:
+    if "season" in df_filtered.columns and daily_filtered is not None and not daily_filtered.empty:
+        tmp = daily_filtered.copy()
+        if "season" not in tmp.columns and "date" in df_filtered.columns:
             s_map = (
-                df_f.groupby("date")["season"]
-                    .agg(lambda s: s.mode().iloc[0] if len(s.mode()) else np.nan)
-                    .reset_index()
+                df_filtered.groupby("date")["season"]
+                .agg(lambda s: s.mode().iloc[0] if len(s.mode()) else np.nan)
+                .reset_index()
             )
             tmp = tmp.merge(s_map, on="date", how="left")
         if "season" in tmp.columns and "bike_rides_daily" in tmp.columns:
@@ -1187,65 +1234,69 @@ if page == "Intro":
                 peak_value = f"{m.index[0]}"
                 peak_sub   = f"{kfmt(m.iloc[0])} avg trips"
 
-    # --- KPI cards ---
+    # KPI cards row
     cA, cB, cC, cD, cE = st.columns(5)
     with cA:
-        kpi_card("Total Trips", kfmt(KPIs.get("total_rides", 0)), "Across all stations", "🧮")
+        kpi_card("Total Trips", kfmt(kpis.get("total_rides", 0)), "Across all stations", "🧮")
     with cB:
-        kpi_card("Daily Average", kfmt(KPIs["avg_day"]) if KPIs.get("avg_day") is not None else "—",
+        kpi_card("Daily Average", kfmt(kpis["avg_day"]) if kpis.get("avg_day") is not None else "—",
                  "Trips per day (selection)", "📅")
     with cC:
         kpi_card("Temp ↔ Rides (r)",
-                 f"{KPIs['corr_tr']:+.3f}" if KPIs.get("corr_tr") is not None else "—",
+                 f"{kpis['corr_tr']:+.3f}" if kpis.get("corr_tr") is not None else "—",
                  "Pearson on daily agg", "🌡️")
     with cD:
         kpi_card("Weather Uplift", weather_str, "15–25°C vs extreme", "🌦️")
     with cE:
-        # Prefer Coverage for credibility; swap to Peak Season if you want
-        kpi_card("Coverage", coverage, "Weather data availability", "🧩")
-        # kpi_card("Peak Season", peak_value, peak_sub, "🏆")  # ← alternative
+        # Swap to Peak Season if you prefer that KPI:
+        # kpi_card("Peak Season", peak_value, peak_sub, "🏆")
+        kpi_card("Coverage", coverage_str, "Weather data availability", "🧩")
 
-    # --- Mini trend strip (adds motion right on the Intro) ---
-    if daily_f is not None and not daily_f.empty and "avg_temp_c" in daily_f.columns:
-        d = daily_f.sort_values("date").copy()
-        n = 14  # gentle smoothing for both lines
+    # Mini trend strip (14-day smoother)
+    if daily_filtered is not None and not daily_filtered.empty and "avg_temp_c" in daily_filtered.columns:
+        d = daily_filtered.sort_values("date").copy()
+        n = 14
         for col in ["bike_rides_daily", "avg_temp_c"]:
             d[f"{col}_roll"] = d[col].rolling(n, min_periods=max(2, n // 2), center=True).mean()
 
-        fig_intro = make_subplots(specs=[[{"secondary_y": True}]])
-        fig_intro.add_trace(
+        # Fallback colors if constants not defined
+        rides_color = globals().get("RIDES_COLOR", "#1f77b4")
+        temp_color  = globals().get("TEMP_COLOR",  "#d62728")
+
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        fig.add_trace(
             go.Scatter(
                 x=d["date"],
                 y=d["bike_rides_daily_roll"].fillna(d["bike_rides_daily"]),
                 name="Daily rides",
                 mode="lines",
-                line=dict(color=RIDES_COLOR, width=2),
+                line=dict(color=rides_color, width=2),
             ),
             secondary_y=False,
         )
-        fig_intro.add_trace(
+        fig.add_trace(
             go.Scatter(
                 x=d["date"],
                 y=d["avg_temp_c_roll"].fillna(d["avg_temp_c"]),
                 name="Avg temp (°C)",
                 mode="lines",
-                line=dict(color=TEMP_COLOR, width=2, dash="dot"),
+                line=dict(color=temp_color, width=2, dash="dot"),
                 opacity=0.9,
             ),
             secondary_y=True,
         )
-        fig_intro.update_layout(
+        fig.update_layout(
             height=280,
             margin=dict(l=20, r=20, t=30, b=0),
             hovermode="x unified",
             showlegend=True,
-            title="Trend overview (14-day smoother)"
+            title="Trend overview (14-day smoother)",
         )
-        fig_intro.update_yaxes(title_text="Rides", secondary_y=False)
-        fig_intro.update_yaxes(title_text="Temp (°C)", secondary_y=True)
-        st.plotly_chart(fig_intro, use_container_width=True)
+        fig.update_yaxes(title_text="Rides", secondary_y=False)
+        fig.update_yaxes(title_text="Temp (°C)", secondary_y=True)
+        st.plotly_chart(fig, use_container_width=True)
 
-    # --- Sharpened “What you’ll find here” copy ---
+    # Overview copy
     st.markdown("### What you’ll find here")
     c1, c2, c3, c4 = st.columns(4)
     c1.info("**Decision-ready KPIs**\n\nTotals, avg/day, and a defensible temp↔rides correlation.")
@@ -1254,188 +1305,252 @@ if page == "Intro":
     c4.info("**Time patterns**\n\nWeekday×Hour heatmap + marginal profiles for staffing windows.")
     st.caption("Use the sidebar filters; every view updates live.")
 
-elif page == "Weather vs Bike Usage":
+if page == "Intro":
+    page_intro(
+        df_filtered=df_f,
+        daily_filtered=daily_f,
+        date_range=date_range,
+        seasons=seasons,
+        usertype=usertype,
+        hour_range=hour_range,
+        cover_path=cover_path,  # or None if you don't want the cover
+    )
+
+# ────────────────────────────── Page: Weather vs Bike Usage ──────────────────────────────
+
+def _rolling_cols(d: pd.DataFrame, cols: list[str], win: int) -> pd.DataFrame:
+    """Add centered rolling means for the given columns using window=win."""
+    if win <= 1:
+        return d
+    d = d.copy()
+    for c in cols:
+        if c in d.columns:
+            d[f"{c}_roll"] = d[c].rolling(win, min_periods=max(2, win // 2), center=True).mean()
+    return d
+
+def _first_existing(d: pd.DataFrame, candidates: list[str]) -> str | None:
+    """Return the first existing column from candidates or None."""
+    for c in candidates:
+        if c in d.columns:
+            return c
+    return None
+
+def page_weather_vs_usage(daily_filtered: pd.DataFrame) -> None:
+    """Daily rides vs weather: trend, scatter, distributions, lab, residual index."""
     st.header("🌤️ Daily bike rides vs weather")
 
-    if daily_f is None or daily_f.empty:
+    if daily_filtered is None or daily_filtered.empty:
         st.warning("Daily metrics aren’t available. Provide trip rows with `date` to aggregate.")
-    else:
-        # ---------- Prep once ----------
-        d = daily_f.sort_values("date").copy()
+        return
 
-        # Coverage ribbon (trust signal)
-        cov = d["avg_temp_c"].notna().mean()*100 if "avg_temp_c" in d.columns else 0
-        st.caption(f"Weather coverage in selection: **{cov:.0f}%** — metrics account for missing values.")
+    d = daily_filtered.sort_values("date").copy()
 
-        # ---------- Tabs ----------
-        tab_trend, tab_scatter, tab_dist, tab_lab, tab_resid = st.tabs(
-            ["📈 Trend", "🔬 Scatter", "📦 Distributions", "🧪 Lab", "📉 De-weathered Index"]
+    # Coverage ribbon (trust signal)
+    cov = d["avg_temp_c"].notna().mean() * 100 if "avg_temp_c" in d.columns else 0.0
+    st.caption(f"Weather coverage in selection: **{cov:.0f}%** — metrics account for missing values.")
+
+    # Tabs
+    tab_trend, tab_scatter, tab_dist, tab_lab, tab_resid = st.tabs(
+        ["📈 Trend", "🔬 Scatter", "📦 Distributions", "🧪 Lab", "📉 De-weathered Index"]
+    )
+
+    # ======== Trend tab ========
+    with tab_trend:
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            roll_win_label = st.selectbox("Rolling window", ["Off", "7d", "14d", "30d"], index=1)
+        with c2:
+            show_precip = st.checkbox("Show precipitation bars (mm)", value=("precip_mm" in d.columns))
+        with c3:
+            show_wind = st.checkbox("Show wind line (kph)", value=("wind_kph" in d.columns))
+        with c4:
+            st.caption("Use other tabs for residuals & elasticity")
+
+        # Rolling smoother
+        if roll_win_label != "Off":
+            roll_n = int(roll_win_label.replace("d", ""))
+            d_roll = _rolling_cols(d, ["bike_rides_daily", "avg_temp_c", "wind_kph"], roll_n)
+        else:
+            roll_n = 1
+            d_roll = d
+
+        # Fallback colors if constants not defined
+        rides_color = globals().get("RIDES_COLOR", "#1f77b4")
+        temp_color  = globals().get("TEMP_COLOR",  "#d62728")
+
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        # rides
+        y_rides = d_roll.get("bike_rides_daily_roll", d["bike_rides_daily"]) if roll_n > 1 else d["bike_rides_daily"]
+        fig.add_trace(
+            go.Scatter(x=d["date"], y=y_rides, mode="lines", name="Daily bike rides",
+                       line=dict(color=rides_color, width=2)),
+            secondary_y=False,
         )
 
-        # ======== Trend tab ========
-        with tab_trend:
-            c1, c2, c3, c4 = st.columns(4)
-            with c1:
-                roll_win = st.selectbox("Rolling window", ["Off","7d","14d","30d"], index=1)
-            with c2:
-                show_precip = st.checkbox("Show precipitation bars (mm)", value=("precip_mm" in d.columns))
-            with c3:
-                show_wind = st.checkbox("Show wind line (kph)", value=("wind_kph" in d.columns))
-            with c4:
-                st.caption("Use other tabs for residuals & elasticity")
+        # temp
+        if "avg_temp_c" in d.columns and d["avg_temp_c"].notna().any():
+            y_temp = d_roll.get("avg_temp_c_roll", d["avg_temp_c"]) if roll_n > 1 else d["avg_temp_c"]
+            fig.add_trace(
+                go.Scatter(x=d["date"], y=y_temp, mode="lines", name="Average temperature (°C)",
+                           line=dict(color=temp_color, width=2, dash="dot"), opacity=0.9),
+                secondary_y=True,
+            )
 
-            # Rolling smoother
-            if roll_win != "Off":
-                n = int(roll_win.replace("d", ""))
-                for col in ["bike_rides_daily", "avg_temp_c", "wind_kph"]:
-                    if col in d.columns:
-                        d[f"{col}_roll"] = d[col].rolling(n, min_periods=max(2, n // 2), center=True).mean()
+        # wind
+        if show_wind and "wind_kph" in d.columns and d["wind_kph"].notna().any():
+            y_wind = d_roll.get("wind_kph_roll", d["wind_kph"]) if roll_n > 1 else d["wind_kph"]
+            fig.add_trace(
+                go.Scatter(x=d["date"], y=y_wind, mode="lines", name="Avg wind (kph)",
+                           line=dict(width=1), opacity=0.5),
+                secondary_y=True,
+            )
 
-            fig = make_subplots(specs=[[{"secondary_y": True}]])
-            # rides
-            y_rides = d.get("bike_rides_daily_roll", d["bike_rides_daily"]) if roll_win != "Off" else d["bike_rides_daily"]
-            fig.add_trace(go.Scatter(x=d["date"], y=y_rides, mode="lines", name="Daily bike rides",
-                                     line=dict(color=RIDES_COLOR, width=2)), secondary_y=False)
+        # precip
+        if show_precip and "precip_mm" in d.columns and d["precip_mm"].notna().any():
+            fig.add_trace(
+                go.Bar(x=d["date"], y=d["precip_mm"], name="Precipitation (mm)",
+                       marker_color="rgba(100,100,120,0.35)", opacity=0.4),
+                secondary_y=False,
+            )
 
-            # temp
-            if "avg_temp_c" in d.columns and d["avg_temp_c"].notna().any():
-                y_temp = d.get("avg_temp_c_roll", d["avg_temp_c"]) if roll_win != "Off" else d["avg_temp_c"]
-                fig.add_trace(go.Scatter(x=d["date"], y=y_temp, mode="lines",
-                                         name="Average temperature (°C)",
-                                         line=dict(color=TEMP_COLOR, width=2, dash="dot")), secondary_y=True)
+        # Comfort band cue behind rides (visual only)
+        if len(d):
+            fig.add_hrect(
+                y0=float(d["bike_rides_daily"].min()),
+                y1=float(d["bike_rides_daily"].max()),
+                line_width=0, fillcolor="rgba(34,197,94,0.05)", layer="below"
+            )
 
-            # wind
-            if show_wind and "wind_kph" in d.columns and d["wind_kph"].notna().any():
-                y_wind = d.get("wind_kph_roll", d["wind_kph"]) if roll_win != "Off" else d["wind_kph"]
-                fig.add_trace(go.Scatter(x=d["date"], y=y_wind, mode="lines", name="Avg wind (kph)",
-                                         line=dict(width=1), opacity=0.5), secondary_y=True)
+        fig.update_layout(
+            hovermode="x unified", barmode="overlay", height=560,
+            title="Daily rides vs temperature, precipitation, and wind — NYC (2022)"
+        )
+        fig.update_yaxes(title_text="Bike rides (count)", secondary_y=False)
+        y2_title = "Temperature (°C)" + (" + Wind (kph)" if show_wind and "wind_kph" in d.columns else "")
+        fig.update_yaxes(title_text=y2_title, secondary_y=True)
+        fig.update_xaxes(rangeslider_visible=True)
+        st.plotly_chart(fig, use_container_width=True)
 
-            # precip
-            if show_precip and "precip_mm" in d.columns and d["precip_mm"].notna().any():
-                fig.add_trace(go.Bar(x=d["date"], y=d["precip_mm"], name="Precipitation (mm)",
-                                     marker_color="rgba(100,100,120,0.35)", opacity=0.4), secondary_y=False)
+    # ======== Scatter tab ========
+    with tab_scatter:
+        c1, c2 = st.columns(2)
+        with c1:
+            color_scatter_by = st.selectbox("Color points by", ["None", "wet_day", "precip_bin", "wind_bin"], index=1)
+        with c2:
+            split_wknd = st.checkbox("Show weekday vs weekend fits", value=True,
+                                     help="Highlights commute vs leisure sensitivity")
 
-            # Gentle comfort band cue behind rides (visual only)
-            if len(d):
-                fig.add_hrect(y0=float(d["bike_rides_daily"].min()), y1=float(d["bike_rides_daily"].max()),
-                              line_width=0, fillcolor="rgba(34,197,94,0.05)", layer="below")
+        temp_col = _first_existing(d, ["avg_temp_c", "tavg_c", "tmean_c", "tmin_c", "tmax_c"])
 
-            fig.update_layout(hovermode="x unified", barmode="overlay", height=560)
-            fig.update_yaxes(title_text="Bike rides (count)", secondary_y=False)
-            y2_title = "Temperature (°C)" + (" + Wind (kph)" if show_wind and "wind_kph" in d.columns else "")
-            fig.update_yaxes(title_text=y2_title, secondary_y=True)
-            fig.update_xaxes(rangeslider_visible=True)
-            fig.update_layout(title="Daily rides vs temperature, precipitation, and wind — NYC (2022)")
-            st.plotly_chart(fig, use_container_width=True)
-
-        # ======== Scatter tab ========
-        with tab_scatter:
-            c1, c2 = st.columns(2)
-            with c1:
-                color_scatter_by = st.selectbox("Color points by", ["None","wet_day","precip_bin","wind_bin"], index=1)
-            with c2:
-                split_wknd = st.checkbox("Show weekday vs weekend fits", value=True, help="Highlights commute vs leisure sensitivity")
-
-            # choose temp column
-            temp_col = None
-            for c in ["avg_temp_c", "tavg_c", "tmean_c", "tmin_c", "tmax_c"]:
-                if c in d.columns:
-                    temp_col = c
-                    break
-
-            if temp_col is None or "bike_rides_daily" not in d.columns:
-                st.info("Temperature or daily rides missing for scatter. Check weather merge.")
+        if temp_col is None or "bike_rides_daily" not in d.columns:
+            st.info("Temperature or daily rides missing for scatter. Check weather merge.")
+        else:
+            scatter_df = d.dropna(subset=[temp_col, "bike_rides_daily"]).copy()
+            if scatter_df.empty:
+                st.info("No rows available for scatter after dropping missing values.")
             else:
-                scatter_df = d.dropna(subset=[temp_col, "bike_rides_daily"]).copy()
-                if scatter_df.empty:
-                    st.info("No rows available for scatter after dropping missing values.")
-                else:
-                    chosen = None if color_scatter_by == "None" else color_scatter_by
-                    color_arg = chosen if (chosen in scatter_df.columns) else None
-                    labels = {
-                        temp_col: temp_col.replace("_", " ").title().replace("C", "(°C)"),
-                        "bike_rides_daily": "Bike rides (count)",
-                        "wet_day": "Wet day",
-                        "precip_bin": "Precipitation",
-                        "wind_bin": "Wind",
-                    }
-                    fig2 = px.scatter(scatter_df, x=temp_col, y="bike_rides_daily", color=color_arg,
-                                      labels=labels, opacity=0.85, trendline="ols")
-                    fig2.update_layout(height=520, title="Rides vs Temperature")
-                    st.plotly_chart(fig2, use_container_width=True)
+                chosen = None if color_scatter_by == "None" else color_scatter_by
+                color_arg = chosen if (chosen in scatter_df.columns) else None
+                labels = {
+                    temp_col: temp_col.replace("_", " ").title().replace("C", "(°C)"),
+                    "bike_rides_daily": "Bike rides (count)",
+                    "wet_day": "Wet day",
+                    "precip_bin": "Precipitation",
+                    "wind_bin": "Wind",
+                }
+                fig2 = px.scatter(
+                    scatter_df, x=temp_col, y="bike_rides_daily", color=color_arg,
+                    labels=labels, opacity=0.85, trendline="ols"
+                )
+                fig2.update_layout(height=520, title="Rides vs Temperature")
+                st.plotly_chart(fig2, use_container_width=True)
 
-                # Elasticity & rain penalty KPIs (quadratic fit)
-                df_fit = d.dropna(subset=["avg_temp_c","bike_rides_daily"]) if "avg_temp_c" in d.columns else pd.DataFrame()
-                if len(df_fit) >= 20:
-                    Xq = np.c_[np.ones(len(df_fit)), df_fit["avg_temp_c"], df_fit["avg_temp_c"]**2]
-                    a,b,c = np.linalg.lstsq(Xq, df_fit["bike_rides_daily"], rcond=None)[0]
-                    t0 = 20.0
-                    rides_t0 = a + b*t0 + c*t0*t0
-                    slope_t0 = b + 2*c*t0
-                    elasticity_pct = (slope_t0 / rides_t0) * 100 if rides_t0>0 else np.nan
-                    rain_pen = None
-                    if "wet_day" in d.columns and d["wet_day"].notna().any():
-                        dry = d.loc[d["wet_day"]==0, "bike_rides_daily"].mean()
-                        wet = d.loc[d["wet_day"]==1, "bike_rides_daily"].mean()
-                        if pd.notnull(dry) and dry>0: rain_pen = (wet-dry)/dry*100
-                    k1, k2 = st.columns(2)
-                    with k1: st.metric("Temp elasticity @20°C", f"{elasticity_pct:+.1f}% / °C")
-                    with k2: st.metric("Rain penalty (wet vs dry)", f"{rain_pen:+.0f}%" if rain_pen is not None else "—")
+            # Elasticity & rain penalty (quadratic fit)
+            df_fit = d.dropna(subset=["avg_temp_c", "bike_rides_daily"]) if "avg_temp_c" in d.columns else pd.DataFrame()
+            if len(df_fit) >= 20:
+                Xq = np.c_[np.ones(len(df_fit)), df_fit["avg_temp_c"], df_fit["avg_temp_c"]**2]
+                a, b, c = np.linalg.lstsq(Xq, df_fit["bike_rides_daily"], rcond=None)[0]
+                t0 = 20.0
+                rides_t0 = a + b*t0 + c*t0*t0
+                slope_t0 = b + 2*c*t0
+                elasticity_pct = (slope_t0 / rides_t0) * 100 if rides_t0 > 0 else np.nan
 
-                # Weekday vs Weekend interaction fits
-                if split_wknd and {"date","bike_rides_daily",temp_col}.issubset(d.columns):
-                    dd = d.dropna(subset=[temp_col,"bike_rides_daily"]).copy()
-                    dd["is_weekend"] = dd["date"].dt.weekday.isin([5,6]).map({True:"Weekend", False:"Weekday"})
-                    figsw = px.scatter(dd, x=temp_col, y="bike_rides_daily", color="is_weekend", opacity=0.85, trendline="ols",
-                                       labels={temp_col: "Avg temp (°C)", "bike_rides_daily": "Bike rides", "is_weekend":"Day type"})
-                    figsw.update_layout(height=480, title="Rides vs Temp — Weekday vs Weekend")
-                    st.plotly_chart(figsw, use_container_width=True)
-
-        # ======== Distributions tab ========
-        with tab_dist:
-            st.subheader("Distribution by rainfall")
-            if "precip_bin" in d.columns and d["precip_bin"].notna().any():
-                fig3 = px.box(d, x="precip_bin", y="bike_rides_daily",
-                              labels={"precip_bin": "Precipitation", "bike_rides_daily": "Bike rides per day"},
-                              category_orders={"precip_bin": ["Low", "Medium", "High"]})
-                fig3.update_layout(height=420)
-                st.plotly_chart(fig3, use_container_width=True)
-            elif "wet_day" in d.columns:
-                fig3 = px.box(d, x=d["wet_day"].map({0: "Dry", 1: "Wet"}), y="bike_rides_daily",
-                              labels={"x": "Day type", "bike_rides_daily": "Bike rides per day"})
-                fig3.update_layout(height=420)
-                st.plotly_chart(fig3, use_container_width=True)
-
-            kcols = st.columns(3)
-            with kcols[0]:
-                if "precip_bin" in d.columns and d["precip_bin"].notna().any():
-                    lo = d.loc[d["precip_bin"] == "Low", "bike_rides_daily"].mean()
-                    hi = d.loc[d["precip_bin"] == "High", "bike_rides_daily"].mean()
-                    if pd.notnull(lo) and pd.notnull(hi) and lo > 0:
-                        st.metric("High rain vs Low", f"{(hi - lo) / lo * 100:+.0f}%")
-            with kcols[1]:
-                if "wet_day" in d.columns:
+                rain_pen = None
+                if "wet_day" in d.columns and d["wet_day"].notna().any():
                     dry = d.loc[d["wet_day"] == 0, "bike_rides_daily"].mean()
                     wet = d.loc[d["wet_day"] == 1, "bike_rides_daily"].mean()
-                    if pd.notnull(dry) and pd.notnull(wet) and dry > 0:
-                        st.metric("Wet vs Dry", f"{(wet - dry) / dry * 100:+.0f}%")
-            with kcols[2]:
-                if "wind_kph" in d.columns:
-                    breezy = d.loc[d["wind_kph"] >= 20, "bike_rides_daily"].mean()
-                    calm   = d.loc[d["wind_kph"] < 10,  "bike_rides_daily"].mean()
-                    if pd.notnull(calm) and pd.notnull(breezy) and calm > 0:
-                        st.metric("Windy (≥20) vs Calm (<10)", f"{(breezy - calm) / calm * 100:+.0f}%")
+                    if pd.notnull(dry) and dry > 0:
+                        rain_pen = (wet - dry) / dry * 100
 
-        # ======== Lab tab (simulator + comfort point + backtest + forecast upload) ========
-        with tab_lab:
-            st.subheader("🔮 Quick ride simulator & comfort point")
+                k1, k2 = st.columns(2)
+                with k1:
+                    st.metric("Temp elasticity @20°C", f"{elasticity_pct:+.1f}% / °C")
+                with k2:
+                    st.metric("Rain penalty (wet vs dry)", f"{rain_pen:+.0f}%" if rain_pen is not None else "—")
 
-            need_cols = {"bike_rides_daily","avg_temp_c"}
-            if need_cols.issubset(d.columns) and len(d.dropna(subset=list(need_cols))) >= 10:
-                d_fit = d.dropna(subset=["avg_temp_c","bike_rides_daily"]).copy()
+            # Weekday vs Weekend interaction fits
+            if split_wknd and {"date", "bike_rides_daily", temp_col}.issubset(d.columns):
+                dd = d.dropna(subset=[temp_col, "bike_rides_daily"]).copy()
+                dd["is_weekend"] = dd["date"].dt.weekday.isin([5, 6]).map({True: "Weekend", False: "Weekday"})
+                figsw = px.scatter(
+                    dd, x=temp_col, y="bike_rides_daily", color="is_weekend",
+                    opacity=0.85, trendline="ols",
+                    labels={temp_col: "Avg temp (°C)", "bike_rides_daily": "Bike rides", "is_weekend": "Day type"},
+                )
+                figsw.update_layout(height=480, title="Rides vs Temp — Weekday vs Weekend")
+                st.plotly_chart(figsw, use_container_width=True)
 
-                # Linear simulator (fast, intuitive)
-                if LinearRegression is not None and len(d_fit) >= 3:
+    # ======== Distributions tab ========
+    with tab_dist:
+        st.subheader("Distribution by rainfall")
+        if "precip_bin" in d.columns and d["precip_bin"].notna().any():
+            fig3 = px.box(
+                d, x="precip_bin", y="bike_rides_daily",
+                labels={"precip_bin": "Precipitation", "bike_rides_daily": "Bike rides per day"},
+                category_orders={"precip_bin": ["Low", "Medium", "High"]},
+            )
+            fig3.update_layout(height=420)
+            st.plotly_chart(fig3, use_container_width=True)
+        elif "wet_day" in d.columns:
+            fig3 = px.box(
+                d, x=d["wet_day"].map({0: "Dry", 1: "Wet"}), y="bike_rides_daily",
+                labels={"x": "Day type", "bike_rides_daily": "Bike rides per day"},
+            )
+            fig3.update_layout(height=420)
+            st.plotly_chart(fig3, use_container_width=True)
+
+        kcols = st.columns(3)
+        with kcols[0]:
+            if "precip_bin" in d.columns and d["precip_bin"].notna().any():
+                lo = d.loc[d["precip_bin"] == "Low", "bike_rides_daily"].mean()
+                hi = d.loc[d["precip_bin"] == "High", "bike_rides_daily"].mean()
+                if pd.notnull(lo) and pd.notnull(hi) and lo > 0:
+                    st.metric("High rain vs Low", f"{(hi - lo) / lo * 100:+.0f}%")
+        with kcols[1]:
+            if "wet_day" in d.columns:
+                dry = d.loc[d["wet_day"] == 0, "bike_rides_daily"].mean()
+                wet = d.loc[d["wet_day"] == 1, "bike_rides_daily"].mean()
+                if pd.notnull(dry) and pd.notnull(wet) and dry > 0:
+                    st.metric("Wet vs Dry", f"{(wet - dry) / dry * 100:+.0f}%")
+        with kcols[2]:
+            if "wind_kph" in d.columns:
+                breezy = d.loc[d["wind_kph"] >= 20, "bike_rides_daily"].mean()
+                calm   = d.loc[d["wind_kph"] < 10,  "bike_rides_daily"].mean()
+                if pd.notnull(calm) and pd.notnull(breezy) and calm > 0:
+                    st.metric("Windy (≥20) vs Calm (<10)", f"{(breezy - calm) / calm * 100:+.0f}%")
+
+    # ======== Lab tab (simulator + comfort point + backtest + forecast upload) ========
+    with tab_lab:
+        st.subheader("🔮 Quick ride simulator & comfort point")
+
+        need_cols = {"bike_rides_daily", "avg_temp_c"}
+        if need_cols.issubset(d.columns) and len(d.dropna(subset=list(need_cols))) >= 10:
+            d_fit = d.dropna(subset=["avg_temp_c", "bike_rides_daily"]).copy()
+
+            # Linear simulator (fast, intuitive)
+            try:
+                from sklearn.linear_model import LinearRegression  # scoped import; optional dep
+                if len(d_fit) >= 3:
                     model = LinearRegression().fit(
                         d_fit[["avg_temp_c"]].to_numpy(), d_fit["bike_rides_daily"].to_numpy()
                     )
@@ -1446,116 +1561,127 @@ elif page == "Weather vs Bike Usage":
                     )
                     pred = int(model.predict([[t_sel]])[0])
                     st.metric("Expected rides (linear)", f"{pred:,}")
-                else:
-                    st.info("Install scikit-learn to enable the linear simulator.")
+            except Exception:
+                st.info("Install scikit-learn to enable the linear simulator.")
 
-                # Quadratic “comfort” curve + optimum
-                X = np.c_[np.ones(len(d_fit)), d_fit["avg_temp_c"], d_fit["avg_temp_c"]**2]
-                try:
-                    beta = np.linalg.lstsq(X, d_fit["bike_rides_daily"], rcond=None)[0]
-                    a, b, c = map(float, beta)   # rides ≈ a + b*T + c*T^2
-                    t_opt = (-b / (2*c)) if (c not in (0, np.nan) and np.isfinite(c)) else np.nan
+            # Quadratic “comfort” curve + optimum
+            X = np.c_[np.ones(len(d_fit)), d_fit["avg_temp_c"], d_fit["avg_temp_c"]**2]
+            try:
+                beta = np.linalg.lstsq(X, d_fit["bike_rides_daily"], rcond=None)[0]
+                a, b, c = map(float, beta)   # rides ≈ a + b*T + c*T^2
+                t_opt = (-b / (2*c)) if (c not in (0, np.nan) and np.isfinite(c)) else np.nan
 
-                    if np.isfinite(t_opt):
-                        st.success(f"Estimated **optimal temperature** for demand: **{t_opt:.1f}°C** (quadratic fit)")
+                if np.isfinite(t_opt):
+                    st.success(f"Estimated **optimal temperature** for demand: **{t_opt:.1f}°C** (quadratic fit)")
 
-                    # Mini visualization
-                    t_grid = np.linspace(d_fit["avg_temp_c"].min(), d_fit["avg_temp_c"].max(), 100)
-                    y_hat  = a + b*t_grid + c*(t_grid**2)
-                    figq = go.Figure()
-                    figq.add_trace(go.Scatter(x=d_fit["avg_temp_c"], y=d_fit["bike_rides_daily"],
-                                              mode="markers", name="Observed", opacity=0.5))
-                    figq.add_trace(go.Scatter(x=t_grid, y=y_hat, mode="lines", name="Quadratic fit"))
-                    if np.isfinite(t_opt):
-                        figq.add_vline(x=t_opt, line_dash="dot")
-                    figq.update_layout(height=380, title="Comfort curve (rides vs temperature)")
-                    figq.update_xaxes(title="Avg temp (°C)")
-                    figq.update_yaxes(title="Bike rides per day")
-                    st.plotly_chart(figq, use_container_width=True)
-                except Exception:
-                    st.info("Quadratic fit not available for this selection.")
+                # Mini visualization
+                t_grid = np.linspace(d_fit["avg_temp_c"].min(), d_fit["avg_temp_c"].max(), 100)
+                y_hat  = a + b*t_grid + c*(t_grid**2)
+                figq = go.Figure()
+                figq.add_trace(go.Scatter(x=d_fit["avg_temp_c"], y=d_fit["bike_rides_daily"],
+                                          mode="markers", name="Observed", opacity=0.5))
+                figq.add_trace(go.Scatter(x=t_grid, y=y_hat, mode="lines", name="Quadratic fit"))
+                if np.isfinite(t_opt):
+                    figq.add_vline(x=t_opt, line_dash="dot")
+                figq.update_layout(height=380, title="Comfort curve (rides vs temperature)")
+                figq.update_xaxes(title="Avg temp (°C)")
+                figq.update_yaxes(title="Bike rides per day")
+                st.plotly_chart(figq, use_container_width=True)
+            except Exception:
+                st.info("Quadratic fit not available for this selection.")
+        else:
+            st.caption("Need daily rides + avg_temp_c for the simulator.")
+
+        # Backtest (credibility)
+        with st.expander("📏 Backtest (train/test)"):
+            if len(d) >= 90 and "avg_temp_c" in d.columns and d["avg_temp_c"].notna().sum() >= 60:
+                d2 = d.dropna(subset=["avg_temp_c", "bike_rides_daily"]).sort_values("date").copy()
+                cut = int(len(d2) * 0.75)
+                tr, te = d2.iloc[:cut], d2.iloc[cut:]
+
+                # Baseline: rides ~ temp (linear)
+                Xtr = np.c_[np.ones(len(tr)), tr["avg_temp_c"]]
+                Xte = np.c_[np.ones(len(te)), te["avg_temp_c"]]
+                b_lin, *_ = np.linalg.lstsq(Xtr, tr["bike_rides_daily"], rcond=None)
+                pred_lin = Xte @ b_lin
+
+                # Enriched model via helper
+                yhat_te = None
+                out_te = deweather_fit_predict(te)
+                if out_te is not None:
+                    yhat_te = out_te[0]
+
+                def _mae(y, yhat):
+                    y = np.asarray(y); yhat = np.asarray(yhat)
+                    m = np.isfinite(y) & np.isfinite(yhat)
+                    return float(np.mean(np.abs(y[m] - yhat[m]))) if m.any() else np.nan
+
+                mae_lin = _mae(te["bike_rides_daily"].values, pred_lin)
+                mae_enr = _mae(te["bike_rides_daily"].values, yhat_te.values if yhat_te is not None else np.full(len(te), np.nan))
+
+                cbt1, cbt2 = st.columns(2)
+                with cbt1:
+                    st.metric("MAE — Linear(temp)", f"{mae_lin:,.0f}" if np.isfinite(mae_lin) else "—")
+                with cbt2:
+                    st.metric("MAE — Enriched", f"{mae_enr:,.0f}" if np.isfinite(mae_enr) else "—")
+                if np.isfinite(mae_lin) and np.isfinite(mae_enr):
+                    st.caption(f"ΔMAE: {(mae_lin - mae_enr):,.0f} better with enriched model.")
             else:
-                st.caption("Need daily rides + avg_temp_c for the simulator.")
+                st.info("Need ≥90 days with temperature to backtest.")
 
-            # Backtest (credibility)
-            with st.expander("📏 Backtest (train/test)"):
-                if len(d) >= 90 and "avg_temp_c" in d.columns and d["avg_temp_c"].notna().sum() >= 60:
-                    d2 = d.dropna(subset=["avg_temp_c","bike_rides_daily"]).sort_values("date").copy()
-                    cut = int(len(d2)*0.75)
-                    tr, te = d2.iloc[:cut], d2.iloc[cut:]
+        # Bring-your-own forecast (product hook)
+        st.markdown("#### 🔮 Bring your own forecast (CSV)")
+        up = st.file_uploader(
+            "Upload 7–14 day forecast CSV with columns: date, avg_temp_c, precip_mm, wind_kph",
+            type=["csv"]
+        )
+        if up is not None:
+            try:
+                df_fc = pd.read_csv(up, parse_dates=["date"])
+                df_fc = df_fc.reindex(columns=["date", "avg_temp_c", "precip_mm", "wind_kph"])
 
-                    # Baseline: rides ~ temp (linear)
-                    Xtr = np.c_[np.ones(len(tr)), tr["avg_temp_c"]]
-                    Xte = np.c_[np.ones(len(te)), te["avg_temp_c"]]
-                    b_lin, *_ = np.linalg.lstsq(Xtr, tr["bike_rides_daily"], rcond=None)
-                    pred_lin = Xte @ b_lin
+                # Share design with helper by concatenation
+                d3 = d.dropna(subset=["avg_temp_c", "bike_rides_daily"]).copy()
+                tmp = pd.concat(
+                    [d3[["date", "avg_temp_c", "precip_mm", "wind_kph", "bike_rides_daily"]],
+                     df_fc.assign(bike_rides_daily=np.nan)],
+                    ignore_index=True
+                )
+                out_tmp = deweather_fit_predict(tmp)
+                yhat_tmp = out_tmp[0] if out_tmp is not None else None
 
-                    # Enriched: quadratic + rain + wind + weekday/month dummies (via helper)
-                    yhat_tr = None
-                    yhat_te = None
-                    out_tr = deweather_fit_predict(tr)
-                    out_te = deweather_fit_predict(te)
-                    if out_tr is not None: yhat_tr = out_tr[0]
-                    if out_te is not None: yhat_te = out_te[0]
+                mask_fc = tmp["bike_rides_daily"].isna()
+                fc = tmp.loc[mask_fc, ["date"]].copy()
+                fc["pred_rides"] = yhat_tmp.loc[mask_fc].values if yhat_tmp is not None else np.nan
 
-                    def MAE(y, yhat): 
-                        y = np.asarray(y)
-                        yhat = np.asarray(yhat)
-                        m = np.isfinite(y) & np.isfinite(yhat)
-                        return float(np.mean(np.abs(y[m] - yhat[m]))) if m.any() else np.nan
+                figf = px.bar(fc, x="date", y="pred_rides",
+                              labels={"pred_rides": "Predicted rides", "date": "Date"})
+                figf.update_layout(height=360, title="Forecast rides (uploaded weather)")
+                st.plotly_chart(figf, use_container_width=True)
+                st.dataframe(fc.assign(pred_rides=fc["pred_rides"].round(0).astype("Int64")))
+            except Exception as e:
+                st.info(f"Could not parse forecast: {e}")
 
-                    mae_lin = MAE(te["bike_rides_daily"].values, pred_lin)
-                    mae_enr = MAE(te["bike_rides_daily"].values, yhat_te.values if yhat_te is not None else np.full(len(te), np.nan))
+    # ======== De-weathered Index tab ========
+    with tab_resid:
+        out = deweather_fit_predict(d)
+        if out is None:
+            st.info("Need daily rides + avg_temp_c for de-weathering.")
+        else:
+            yhat, resid_pct, coefs = out
+            dd = pd.DataFrame({"date": d["date"], "resid_pct": resid_pct, "expected": yhat}).dropna()
+            figr = px.line(dd, x="date", y="resid_pct",
+                           labels={"resid_pct": "Residual vs expected (%)", "date": "Date"})
+            figr.add_hline(y=0, line_dash="dot")
+            figr.update_layout(height=420, title="De-weathered demand index (over/under performance)")
+            st.plotly_chart(figr, use_container_width=True)
+            st.metric("Avg residual (last 30 days)", f"{dd.tail(30)['resid_pct'].mean():+.1f}%")
+            with st.expander("Model drivers (top |β|)"):
+                st.write(coefs.sort_values(key=np.abs, ascending=False).head(10).round(3))
 
-                    cbt1, cbt2 = st.columns(2)
-                    with cbt1: st.metric("MAE — Linear(temp)", f"{mae_lin:,.0f}" if np.isfinite(mae_lin) else "—")
-                    with cbt2: st.metric("MAE — Enriched", f"{mae_enr:,.0f}" if np.isfinite(mae_enr) else "—")
-                    if np.isfinite(mae_lin) and np.isfinite(mae_enr):
-                        st.caption(f"ΔMAE: {(mae_lin - mae_enr):,.0f} better with enriched model.")
-                else:
-                    st.info("Need ≥90 days with temperature to backtest.")
+elif page == "Weather vs Bike Usage":
+    page_weather_vs_usage(daily_f)
 
-            # Bring-your-own forecast (product hook)
-            st.markdown("#### 🔮 Bring your own forecast (CSV)")
-            up = st.file_uploader("Upload 7–14 day forecast CSV with columns: date, avg_temp_c, precip_mm, wind_kph", type=["csv"])
-            if up is not None:
-                try:
-                    df_fc = pd.read_csv(up, parse_dates=["date"])
-                    df_fc = df_fc.reindex(columns=["date","avg_temp_c","precip_mm","wind_kph"])
-                    # Concatenate to share design columns with helper
-                    d3 = d.dropna(subset=["avg_temp_c","bike_rides_daily"]).copy()
-                    tmp = pd.concat(
-                        [d3[["date","avg_temp_c","precip_mm","wind_kph","bike_rides_daily"]],
-                         df_fc.assign(bike_rides_daily=np.nan)],
-                        ignore_index=True
-                    )
-                    yhat_tmp, _, _ = deweather_fit_predict(tmp)
-                    mask_fc = tmp["bike_rides_daily"].isna()
-                    fc = tmp.loc[mask_fc, ["date"]].copy()
-                    fc["pred_rides"] = yhat_tmp.loc[mask_fc].values if yhat_tmp is not None else np.nan
-                    figf = px.bar(fc, x="date", y="pred_rides", labels={"pred_rides":"Predicted rides","date":"Date"})
-                    figf.update_layout(height=360, title="Forecast rides (uploaded weather)")
-                    st.plotly_chart(figf, use_container_width=True)
-                    st.dataframe(fc.assign(pred_rides=fc["pred_rides"].round(0).astype("Int64")))
-                except Exception as e:
-                    st.info(f"Could not parse forecast: {e}")
-
-        # ======== De-weathered Index tab ========
-        with tab_resid:
-            out = deweather_fit_predict(d)
-            if out is None:
-                st.info("Need daily rides + avg_temp_c for de-weathering.")
-            else:
-                yhat, resid_pct, coefs = out
-                dd = pd.DataFrame({"date": d["date"], "resid_pct": resid_pct, "expected": yhat}).dropna()
-                figr = px.line(dd, x="date", y="resid_pct",
-                               labels={"resid_pct":"Residual vs expected (%)", "date": "Date"})
-                figr.add_hline(y=0, line_dash="dot")
-                figr.update_layout(height=420, title="De-weathered demand index (over/under performance)")
-                st.plotly_chart(figr, use_container_width=True)
-                st.metric("Avg residual (last 30 days)", f"{dd.tail(30)['resid_pct'].mean():+.1f}%")
-                with st.expander("Model drivers (top |β|)"):
-                    st.write(coefs.sort_values(key=np.abs, ascending=False).head(10).round(3))
 
 elif page == "Trip Metrics (Duration • Distance • Speed)":
     st.header("🚴 Trip metrics")
