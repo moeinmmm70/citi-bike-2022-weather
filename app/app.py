@@ -695,7 +695,7 @@ def _slug(s: str) -> str:
     # Collapse multiple spaces and lowercase
     return " ".join(s.split()).lower()
 
-# ---------- URL helpers (future-proof) ----------
+# ---------- URL helpers (unified & future-proof) ----------
 def _qp_get() -> dict:
     """
     Return current query params as a simple dict of scalars (not lists).
@@ -704,24 +704,35 @@ def _qp_get() -> dict:
     try:
         qp = dict(st.query_params)  # Streamlit ≥1.31
     except Exception:
-        # Fallback for older versions
         qp = st.experimental_get_query_params()
-    # Unwrap one-element lists
+    # unwrap one-element lists to scalars
     return {k: (v[0] if isinstance(v, list) and len(v) == 1 else v) for k, v in qp.items()}
 
-def _qp_set(qp: dict) -> None:
+def _qp_set(qp: dict | None = None, **kv) -> None:
     """
-    Accepts scalars or lists. Writes scalars to the URL.
-    Only updates the querystring; does not rerun.
+    Accepts either a dict (_qp_set({"page":"Intro"})) or kwargs (_qp_set(page="Intro")).
+    Merges both; kwargs win on key conflicts. Writes scalars to URL.
     """
-    # Flatten one-element lists to scalars
-    flat = {k: (v[0] if isinstance(v, list) and len(v) == 1 else v) for k, v in qp.items()}
+    payload = {}
+    if qp:
+        # flatten one-element lists to scalars
+        payload.update({k: (v[0] if isinstance(v, list) and len(v) == 1 else v) for k, v in qp.items()})
+    if kv:
+        payload.update(kv)
+
     try:
         st.query_params.clear()
-        st.query_params.update(flat)  # Streamlit ≥1.31
+        st.query_params.update({k: "" if v is None else str(v) for k, v in payload.items()})
     except Exception:
-        # Fallback for older versions
-        st.experimental_set_query_params(**flat)
+        # Older Streamlit fallback
+        st.experimental_set_query_params(**{k: "" if v is None else str(v) for k, v in payload.items()})
+
+def _qp_clear() -> None:
+    """Remove all query params."""
+    try:
+        st.query_params.clear()
+    except Exception:
+        st.experimental_set_query_params()
 
 # ──────────────── UI Helpers (Hero Panel + KPI Cards) ────────────────
 
@@ -1000,28 +1011,6 @@ def inlier_mask(df: pd.DataFrame, col: str, lo: float = 0.01, hi: float = 0.995)
 # ────────────────────────────── Sidebar / Data ─────────────────────────────
 
 st.sidebar.header("⚙️ Controls")
-
-# ---------- Query param helpers (Streamlit ≥1.31 safe) ----------
-def _qp_get():
-    return dict(st.query_params) if hasattr(st, "query_params") else st.experimental_get_query_params()
-
-def _qp_set(**kv):
-    try:
-        if hasattr(st, "query_params"):
-            st.query_params.update({k: str(v) for k, v in kv.items() if v is not None})
-        else:
-            st.experimental_set_query_params(**{k: str(v) for k, v in kv.items() if v is not None})
-    except Exception:
-        pass
-
-def _qp_clear():
-    try:
-        if hasattr(st, "query_params"):
-            st.query_params.clear()
-        else:
-            st.experimental_set_query_params()
-    except Exception:
-        pass
 
 # ---------- Data presence ----------
 if not DATA_PATH.exists():
