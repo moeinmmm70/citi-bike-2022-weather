@@ -3700,21 +3700,27 @@ def page_time_series_forecast(daily_all: pd.DataFrame | None,
         lo, hi = _pi_from_resid(yhat, resid)
         return yhat, lo, hi
 
-    def forecast_seasonal_naive(series: pd.Series, h: int, season: int = 7):
-    series = pd.to_numeric(series, errors="coerce").dropna()
-    if len(series) < season:
-        # not enough history → naive
-        yhat = np.full(h, float(series.iloc[-1]))
-        resid = series.diff().dropna().to_numpy(dtype=float)
-        lo, hi = _pi_from_resid(yhat, resid)
-        return yhat, lo, hi
+        def forecast_seasonal_naive(series: pd.Series, h: int, season: int = 7):
+        series = pd.to_numeric(series, errors="coerce").dropna()
+        if len(series) < season:
+            # not enough history → naive
+            yhat = np.full(h, float(series.iloc[-1]))
+            resid = series.diff().dropna().to_numpy(dtype=float)
+            lo, hi = _pi_from_resid(yhat, resid)
+            return yhat, lo, hi
 
-    last_season = series.iloc[-season:].to_numpy(dtype=float)
-    # If last season is (near-)constant, don’t mislead—blend to MA level
-    if np.nanmax(last_season) - np.nanmin(last_season) < 1e-6:
-        base = float(series.iloc[-season:].mean())
-        yhat = np.full(h, base)
-        resid = (series - series.rolling(season, min_periods=3).mean()).dropna().to_numpy(dtype=float)
+        last_season = series.iloc[-season:].to_numpy(dtype=float)
+        # If last season is (near-)constant, don’t mislead—blend to MA level
+        if np.nanmax(last_season) - np.nanmin(last_season) < 1e-6:
+            base = float(series.iloc[-season:].mean())
+            yhat = np.full(h, base)
+            resid = (series - series.rolling(season, min_periods=3).mean()).dropna().to_numpy(dtype=float)
+            lo, hi = _pi_from_resid(yhat, resid)
+            return yhat, lo, hi
+
+        reps = int(np.ceil(h / season))
+        yhat = np.tile(last_season, reps)[:h]
+        resid = (series.iloc[season:] - series.shift(season).iloc[season:]).dropna().to_numpy(dtype=float)
         lo, hi = _pi_from_resid(yhat, resid)
         return yhat, lo, hi
 
