@@ -627,6 +627,10 @@ def inlier_mask(df: pd.DataFrame, col: str, lo=0.01, hi=0.995):
 st.sidebar.title("🚲 Citi Bike 2022 Analysis")
 
 # --- Quick Actions ---
+st.sidebar.subheader("⚡ Quick Actions")
+if st.sidebar.button("✨ Commuter preset"):
+st.query_params.update({
+"page": "📑 Daily & Hourly Trends",
 "hour_range": [6, 10],
 "hour_range2": [16, 20],
 "member_type": "member",
@@ -634,13 +638,11 @@ st.sidebar.title("🚲 Citi Bike 2022 Analysis")
 })
 st.rerun()
 
-
 # Unified reset button
 if st.sidebar.button("♻️ Reset filters and reload"):
 st.cache_data.clear()
 st.query_params.clear()
 st.rerun()
-
 
 # --- Filters ---
 st.sidebar.subheader("🎛️ Filters")
@@ -653,7 +655,6 @@ max_value=dt.date(2022, 12, 31),
 help="Select the start and end date for analysis."
 )
 
-
 # Season filter
 season = st.sidebar.multiselect(
 "Season",
@@ -661,7 +662,6 @@ season = st.sidebar.multiselect(
 default=["Winter", "Spring", "Summer", "Autumn"],
 help="Filter by meteorological seasons."
 )
-
 
 # Member type
 member_type = st.sidebar.radio(
@@ -671,7 +671,6 @@ index=0,
 help="Choose rider type to analyze."
 )
 
-
 # Advanced filters
 with st.sidebar.expander("⚙️ More filters"):
 temp_range = st.slider(
@@ -680,13 +679,11 @@ temp_range = st.slider(
 help="Filter by average trip temperature."
 )
 
-
 hour_range = st.slider(
 "Hour of day",
 0, 23, (0, 23),
 help="Filter trips by starting hour."
 )
-
 
 weekdays = st.multiselect(
 "Days of week",
@@ -695,13 +692,11 @@ default=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Su
 help="Select days to include in analysis."
 )
 
-
 robust = st.toggle(
 "Exclude extreme outliers",
 value=True,
 help="Remove top 0.5% of trip durations and speeds."
 )
-
 
 # --- Share Link ---
 st.sidebar.markdown("---")
