@@ -2940,9 +2940,9 @@ def page_station_popularity(df_filtered: pd.DataFrame) -> None:
         geo = leaderboard.join(coords, on="station", how="left").dropna(subset=["lat", "lon"]).copy()
 
         if len(geo):
-            scale = st.slider("Bubble scale", 8, 40, 16)
+            scale = st.slider("Bubble scale", 1, 15, 5)
             vmax = float(geo["rides"].max())
-            geo["radius"] = (60 + scale * (np.sqrt(geo["rides"]) / np.sqrt(vmax if vmax > 0 else 1)) * 100).astype(float)
+            geo["radius"] = (20 + scale * (np.sqrt(geo["rides"]) / np.sqrt(vmax if vmax > 0 else 1)) * 100).astype(float)
             geo["color"] = [[37, 99, 235, 200]] * len(geo)
 
             view_state = pdk.ViewState(
