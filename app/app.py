@@ -2540,9 +2540,7 @@ def page_od_flows(df_filtered: pd.DataFrame) -> None:
         "text/csv",
     )                    
 
-
 # ───────────────────── Page: OD Matrix — Top origins × destinations ─────────────────────
-
 def page_od_matrix(df_filtered: pd.DataFrame) -> None:
     """Top-O × Top-D OD matrix with optional normalization, ordering, and member split."""
     st.header("🧮 OD Matrix — Top origins × destinations")
@@ -2602,42 +2600,62 @@ def page_od_matrix(df_filtered: pd.DataFrame) -> None:
         linkage = leaves_list = None
         _clust_ok = False
 
-    # --- Builder
+    # --- Builder (adds density & coverage diagnostics; clearer names)
     def build_matrix(df_src: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, dict]:
-        dbg: dict[str, int | tuple[int, int]] = {}
+        dbg: dict[str, int | float | tuple[int, int]] = {}
 
+        # Totals per endpoint
         o_tot = df_src.groupby("start_station_name").size().sort_values(ascending=False)
         d_tot = df_src.groupby("end_station_name").size().sort_values(ascending=False)
         dbg["origins_total_unique"] = int(o_tot.shape[0])
         dbg["dests_total_unique"] = int(d_tot.shape[0])
 
+        # Keep top-N endpoints
         o_keep = set(o_tot.head(int(top_orig)).index)
         d_keep = set(d_tot.head(int(top_dest)).index)
         dbg["origins_kept"] = len(o_keep)
         dbg["dests_kept"] = len(d_keep)
 
+        # Filter to the kept endpoints
         df2 = df_src[df_src["start_station_name"].isin(o_keep) & df_src["end_station_name"].isin(d_keep)]
-        dbg["pairs_rows_after_topN"] = int(df2.shape[0])
+        dbg["raw_rows_after_topN_before_pivot"] = int(df2.shape[0])
         if df2.empty:
+            dbg.update({
+                "unique_pairs_after_groupby": 0,
+                "pairs_after_minrides": 0,
+                "matrix_shape": (0, 0),
+                "matrix_nonzero_density_pct": 0.0,
+                "coverage_rides_captured_pct": 0.0,
+            })
             return pd.DataFrame(), pd.DataFrame(), o_tot, d_tot, dbg
 
+        # Group to unique OD pairs
         pairs = (
             df2.groupby(["start_station_name", "end_station_name"])
                .size().rename("rides").reset_index()
         )
-        dbg["unique_pairs"] = int(pairs.shape[0])
+        dbg["unique_pairs_after_groupby"] = int(pairs.shape[0])
 
+        # Apply min_rides threshold
         if min_rides > 1:
             pairs = pairs[pairs["rides"] >= int(min_rides)]
         dbg["pairs_after_minrides"] = int(pairs.shape[0])
         if pairs.empty:
+            total_trips_in_slice = int(df_src.shape[0])
+            dbg.update({
+                "matrix_shape": (0, 0),
+                "matrix_nonzero_density_pct": 0.0,
+                "coverage_rides_captured_pct": 0.0 if total_trips_in_slice > 0 else 0.0,
+            })
             return pd.DataFrame(), pd.DataFrame(), o_tot, d_tot, dbg
 
+        # Pivot to matrix
         mat = pairs.pivot_table(
-            index="start_station_name", columns="end_station_name", values="rides", aggfunc="sum", fill_value=0
+            index="start_station_name", columns="end_station_name",
+            values="rides", aggfunc="sum", fill_value=0
         )
 
-        # Normalize
+        # Normalize (optional)
         if norm == "Row (per origin)":
             denom = mat.sum(axis=1).replace(0, np.nan)
             mat = (mat.T / denom).T.fillna(0.0)
@@ -2663,14 +2681,22 @@ def page_od_matrix(df_filtered: pd.DataFrame) -> None:
                     cZ = linkage(mat.values.T, method="average", metric="euclidean")
                     mat = mat.loc[mat.index[leaves_list(rZ)], mat.columns[leaves_list(cZ)]]
                 else:
-                    # Fallback to totals
                     mat = mat.loc[mat.sum(axis=1).sort_values(ascending=False).index]
                     mat = mat[mat.sum(axis=0).sort_values(ascending=False).index]
             except Exception:
                 mat = mat.loc[mat.sum(axis=1).sort_values(ascending=False).index]
                 mat = mat[mat.sum(axis=0).sort_values(ascending=False).index]
 
+        # Diagnostics
         dbg["matrix_shape"] = (int(mat.shape[0]), int(mat.shape[1]))
+        matrix_cells = int(mat.shape[0] * mat.shape[1])
+        nonzero_cells = int((mat.values > 0).sum()) if matrix_cells else 0
+        dbg["matrix_nonzero_density_pct"] = round(100.0 * nonzero_cells / matrix_cells, 1) if matrix_cells else 0.0
+
+        total_trips_in_slice = int(df_src.shape[0])  # trips that entered this OD page after endpoint filter
+        rides_in_pairs = int(pairs["rides"].sum())
+        dbg["coverage_rides_captured_pct"] = round(100.0 * rides_in_pairs / total_trips_in_slice, 1) if total_trips_in_slice else 0.0
+
         return mat, pairs, o_tot, d_tot, dbg
 
     # --- Heatmap renderer
@@ -2709,6 +2735,45 @@ def page_od_matrix(df_filtered: pd.DataFrame) -> None:
         )
         st.plotly_chart(fig, use_container_width=True)
 
+    # --- Diagnostics renderer (nice KPI layout + downloads)
+    def render_diag(dbg: dict, mat: pd.DataFrame, pairs: pd.DataFrame, label: str | None = None):
+        with st.expander("🧮 Diagnostics & Download", expanded=False):
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("🧭 Origins kept", dbg.get("origins_kept", 0))
+            c2.metric("🎯 Dests kept", dbg.get("dests_kept", 0))
+            c3.metric("🔗 Unique OD pairs", dbg.get("unique_pairs_after_groupby", dbg.get("unique_pairs", 0)))
+            c4.metric("📊 After min rides", dbg.get("pairs_after_minrides", 0))
+
+            c5, c6, c7, c8 = st.columns(4)
+            ms = dbg.get("matrix_shape", (0, 0))
+            c5.metric("🧱 Matrix shape", f"{ms[0]} × {ms[1]}")
+            c6.metric("🌐 Non-zero cells", f"{dbg.get('matrix_nonzero_density_pct', 0.0)} %")
+            c7.metric("📈 Rides coverage", f"{dbg.get('coverage_rides_captured_pct', 0.0)} %")
+            c8.metric("🧾 Rows after topN", dbg.get("raw_rows_after_topN_before_pivot", dbg.get("pairs_rows_after_topN", 0)))
+
+            # Gentle guidance
+            cov = float(dbg.get("coverage_rides_captured_pct", 0.0))
+            den = float(dbg.get("matrix_nonzero_density_pct", 0.0))
+            if cov < 60:
+                st.warning("Coverage is low. Increase Top-N or reduce **Min rides** to capture more traffic.")
+            elif den < 25:
+                st.info("Matrix is quite sparse. Consider lowering Top-N or raising **Min rides** for stronger corridors.")
+
+            # Peek at pairs + downloads
+            if not pairs.empty:
+                st.dataframe(pairs.sort_values("rides", ascending=False).head(40), use_container_width=True)
+                base = (label or "all").replace(" ", "_")
+                st.download_button(
+                    f"⬇️ Download pairs ({label or 'All'}) CSV",
+                    pairs.to_csv(index=False).encode("utf-8"),
+                    f"od_pairs_{base}.csv", "text/csv", key=f"dl_pairs_{base}"
+                )
+                st.download_button(
+                    f"⬇️ Download matrix ({label or 'All'}) CSV",
+                    mat.reset_index().rename(columns={"start_station_name": "origin"}).to_csv(index=False).encode("utf-8"),
+                    f"od_matrix_{base}.csv", "text/csv", key=f"dl_matrix_{base}"
+                )
+
     # --- Render (split or combined)
     if member_split and (mt_col is not None) and (mt_col in subset.columns):
         tabs = st.tabs(["Member 🧑‍💼", "Casual 🚲", "All"])
@@ -2721,38 +2786,11 @@ def page_od_matrix(df_filtered: pd.DataFrame) -> None:
             with tab:
                 mat, pairs, o_tot, d_tot, dbg = build_matrix(seg_df)
                 render_heatmap(mat, f"Top {mat.shape[0]} origins × Top {mat.shape[1]} destinations — {label}")
-
-                with st.expander("Diagnostics & Download"):
-                    st.write(dbg)  # why it might be empty
-                    if not pairs.empty:
-                        st.dataframe(pairs.sort_values("rides", ascending=False).head(40), use_container_width=True)
-                        st.download_button(
-                            f"Download pairs ({label}) CSV",
-                            pairs.to_csv(index=False).encode("utf-8"),
-                            f"od_pairs_{label.replace(' ', '_')}.csv",
-                            "text/csv",
-                            key=f"dl_pairs_{label}",
-                        )
-                        st.download_button(
-                            f"Download matrix ({label}) CSV",
-                            mat.reset_index().rename(columns={"start_station_name": "origin"}).to_csv(index=False).encode("utf-8"),
-                            f"od_matrix_{label.replace(' ', '_')}.csv",
-                            "text/csv",
-                            key=f"dl_matrix_{label}",
-                        )
+                render_diag(dbg, mat, pairs, label)
     else:
         mat, pairs, o_tot, d_tot, dbg = build_matrix(subset)
         render_heatmap(mat, f"Top {mat.shape[0]} origins × Top {mat.shape[1]} destinations")
-        with st.expander("Diagnostics & Download"):
-            st.write(dbg)
-            if not pairs.empty:
-                st.dataframe(pairs.sort_values("rides", ascending=False).head(40), use_container_width=True)
-                st.download_button("Download pairs CSV", pairs.to_csv(index=False).encode("utf-8"), "od_pairs.csv", "text/csv")
-                st.download_button(
-                    "Download matrix CSV",
-                    mat.reset_index().rename(columns={"start_station_name": "origin"}).to_csv(index=False).encode("utf-8"),
-                    "od_matrix.csv", "text/csv",
-                )
+        render_diag(dbg, mat, pairs, None)
 
 # ───────────────────── Page: Station Popularity (Top start stations) ─────────────────────
 
