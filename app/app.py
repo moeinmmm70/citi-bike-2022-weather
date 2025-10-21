@@ -3887,7 +3887,7 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
 
     st.caption("Built from the current selection — share this view via the URL to reproduce the plan.")
 
-# ────────────────────────────── Page routing (place this after defining all page_* functions) ─────────────────────────────────────
+# ────────────────────────────── Page routing ─────────────────────────────────────
 
 if page == "Intro":
     page_intro(
