@@ -1065,6 +1065,7 @@ PAGES = [
     "OD Matrix — Top Origins × Dest",          # detailed flow breakdown
     "Station Imbalance (In vs Out)",           # operational challenge
     "Weekday × Hour Heatmap",                  # temporal pattern synthesis
+    "Time Series — Forecast & Decomposition",
     "Recommendations"                          # actions and strategy
 ]
 
@@ -3568,7 +3569,223 @@ def page_weekday_hour_heatmap(df_filtered: pd.DataFrame) -> None:
 
     st.caption("Tips: try Row % to see within-day timing; Column % to see which days dominate each hour; Z-score to highlight anomalies.")
 
-# ───────────────────── Page: Recommendations (evidence-driven, polished) ─────────────────────
+# ───────────────────── Page: Time Series — Forecast & Decomposition ─────────────────────
+def page_time_series_forecast(daily_all: pd.DataFrame | None,
+                              daily_filtered: pd.DataFrame | None) -> None:
+    """
+    Time series page: STL decomposition, lightweight forecasts (Naive / Seasonal-Naive / 7MA),
+    and rolling-origin backtest on daily bike rides.
+    """
+    import numpy as np
+    import pandas as pd
+    import plotly.graph_objects as go
+    import plotly.express as px
+    import streamlit as st
+
+    # Optional STL
+    try:
+        from statsmodels.tsa.seasonal import STL  # type: ignore
+        HAS_STL = True
+    except Exception:
+        HAS_STL = False
+
+    st.header("📆 Time Series — Forecast & Decomposition")
+
+    # ----- Guardrails & data prep -----
+    if daily_all is None or daily_all.empty or "date" not in daily_all.columns:
+        st.info("Need daily table with `date` and `bike_rides_daily`.")
+        return
+
+    # Prefer filtered daily if available; fall back to all
+    d = (daily_filtered if (daily_filtered is not None and not daily_filtered.empty) else daily_all).copy()
+    if "bike_rides_daily" not in d.columns:
+        st.info("`bike_rides_daily` is missing. Build daily aggregation first.")
+        return
+
+    # Build continuous daily index; fill short gaps sensibly for TS modeling demo
+    s = (d[["date", "bike_rides_daily"]]
+          .dropna()
+          .sort_values("date")
+          .set_index("date")["bike_rides_daily"]
+          .asfreq("D"))
+    # Small, TS-safe imputation for missing days (linear; keeps level for demo)
+    s = s.interpolate(limit_direction="both")
+
+    st.caption(f"Series coverage: **{len(s):,} days** — "
+               f"{int(np.isfinite(s).sum())} usable after interpolation")
+
+    # Sidebar controls
+    st.sidebar.markdown("### ⏱ TS Controls")
+    horizon = st.sidebar.slider("Forecast horizon (days)", 7, 60, 21, 1)
+    show_last_n = st.sidebar.slider("Plot history window (days)", 60, 365, 180, 10)
+    model_name = st.sidebar.selectbox("Model",
+                                      ["Seasonal-Naive (t−7)", "Naive (t−1)", "7-day Moving Average"],
+                                      index=0)
+
+    # Helper: residual-based PI
+    def _pi_from_resid(fc: np.ndarray, resid: np.ndarray, alpha: float = 0.10) -> tuple[np.ndarray, np.ndarray]:
+        resid = resid[np.isfinite(resid)]
+        if resid.size < 10:
+            return fc, fc
+        q = np.quantile(np.abs(resid), 1 - alpha/2.0)  # symmetric abs-quantile band
+        lo = fc - q
+        hi = fc + q
+        return lo, hi
+
+    # Baseline forecasters
+    def forecast_naive(series: pd.Series, h: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        yhat = np.full(h, float(series.iloc[-1]))
+        resid = series.diff().dropna().to_numpy(dtype=float)  # naive residuals ≈ day-to-day deltas
+        lo, hi = _pi_from_resid(yhat, resid)
+        return yhat, lo, hi
+
+    def forecast_seasonal_naive(series: pd.Series, h: int, season: int = 7) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        # Repeat last full season pattern
+        if len(series) < season:
+            return forecast_naive(series, h)
+        last_season = series.iloc[-season:].to_numpy(dtype=float)
+        reps = int(np.ceil(h / season))
+        yhat = np.tile(last_season, reps)[:h]
+        # residuals vs seasonal pattern
+        resid = (series.iloc[-season*10:-season] - series.shift(season).iloc[-season*10:-season]).dropna().to_numpy(dtype=float)
+        lo, hi = _pi_from_resid(yhat, resid)
+        return yhat, lo, hi
+
+    def forecast_ma(series: pd.Series, h: int, k: int = 7) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        base = series.rolling(k, min_periods=max(2, k//2)).mean().iloc[-1]
+        if not np.isfinite(base):
+            base = float(series.iloc[-k:].mean())
+        yhat = np.full(h, float(base))
+        resid = (series - series.rolling(k, min_periods=max(2, k//2)).mean()).dropna().to_numpy(dtype=float)
+        lo, hi = _pi_from_resid(yhat, resid)
+        return yhat, lo, hi
+
+    # Decomposition tab
+    tab_dec, tab_fc, tab_bt = st.tabs(["🔍 Decompose", "📈 Forecast", "🧪 Backtest"])
+
+    # ----- Decomposition -----
+    with tab_dec:
+        st.subheader("STL decomposition (weekly seasonality)")
+        if HAS_STL and len(s) >= 28:
+            try:
+                res = STL(s, period=7, robust=True).fit()
+                comp = pd.DataFrame({
+                    "date": s.index,
+                    "observed": s.values,
+                    "trend": res.trend,
+                    "seasonal": res.seasonal,
+                    "resid": res.resid
+                })
+                # Plot
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=comp["date"], y=comp["observed"], name="Observed", mode="lines"))
+                fig.add_trace(go.Scatter(x=comp["date"], y=comp["trend"], name="Trend", mode="lines"))
+                fig.update_layout(height=380, title="Observed vs Trend")
+                st.plotly_chart(fig, use_container_width=True)
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    fig_s = px.line(comp, x="date", y="seasonal", title="Seasonal (period=7)")
+                    fig_s.update_layout(height=300)
+                    st.plotly_chart(fig_s, use_container_width=True)
+                with c2:
+                    fig_r = px.line(comp, x="date", y="resid", title="Residuals")
+                    fig_r.update_layout(height=300)
+                    st.plotly_chart(fig_r, use_container_width=True)
+
+                # Quick seasonality takeaway
+                peak_dow = (res.seasonal
+                            .groupby(pd.Series(s.index.dayofweek, index=s.index))
+                            .mean()
+                            .rename(index={0:"Mon",1:"Tue",2:"Wed",3:"Thu",4:"Fri",5:"Sat",6:"Sun"})
+                            .sort_values(ascending=False))
+                st.caption(f"Biggest positive seasonal uplift: **{peak_dow.index[0]}**.")
+            except Exception as e:
+                st.warning(f"STL failed ({e}). Showing observed only.")
+                st.line_chart(s)
+        else:
+            st.info("`statsmodels` not available or series too short — showing observed only.")
+            st.line_chart(s)
+
+    # ----- Forecast -----
+    with tab_fc:
+        st.subheader("Short-term forecast (explainable baselines)")
+        # Select model
+        if model_name.startswith("Seasonal"):
+            yhat, lo, hi = forecast_seasonal_naive(s, horizon, season=7)
+        elif model_name.startswith("Naive"):
+            yhat, lo, hi = forecast_naive(s, horizon)
+        else:
+            yhat, lo, hi = forecast_ma(s, horizon, k=7)
+
+        idx_fc = pd.date_range(s.index[-1] + pd.Timedelta(days=1), periods=horizon, freq="D")
+        df_fc = pd.DataFrame({"date": idx_fc, "yhat": yhat, "lo": lo, "hi": hi})
+
+        # Plot last N days + forecast
+        hist = s.iloc[-show_last_n:]
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=hist.index, y=hist.values, name="History", mode="lines"))
+        fig.add_trace(go.Scatter(x=df_fc["date"], y=df_fc["yhat"], name=f"Forecast — {model_name}", mode="lines"))
+        fig.add_trace(go.Scatter(x=pd.concat([df_fc["date"], df_fc["date"][::-1]]),
+                                 y=pd.concat([df_fc["hi"], df_fc["lo"][::-1]]),
+                                 fill="toself", name="Interval", opacity=0.2, line=dict(width=0)))
+        fig.update_layout(height=460,
+                          title=f"{model_name} — next {horizon} days",
+                          hovermode="x unified")
+        fig.update_yaxes(title_text="Bike rides (daily)")
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Numeric preview
+        st.dataframe(df_fc.head(10), use_container_width=True)
+
+    # ----- Backtest (rolling-origin) -----
+    with tab_bt:
+        st.subheader("Rolling-origin backtest")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            initial = st.number_input("Initial train window (days)", 90, max(365, len(s)-horizon-7), 180, step=7)
+        with c2:
+            step = st.number_input("Step size (days)", 1, 30, 7, step=1)
+        with c3:
+            bt_h = st.number_input("Horizon (days)", 7, 30, min(horizon, 14), step=1)
+
+        def _roll_forecast(series: pd.Series, start: int, h: int, model: str):
+            train = series.iloc[:start]
+            if model.startswith("Seasonal"):
+                yhat, _, _ = forecast_seasonal_naive(train, h)
+            elif model.startswith("Naive"):
+                yhat, _, _ = forecast_naive(train, h)
+            else:
+                yhat, _, _ = forecast_ma(train, h, k=7)
+            return yhat
+
+        actuals, preds = [], []
+        starts = range(int(initial), len(s) - int(bt_h) + 1, int(step))
+        for st_ix in starts:
+            fc = _roll_forecast(s, st_ix, int(bt_h), model_name)
+            preds.append(fc)
+            actuals.append(s.iloc[st_ix: st_ix + int(bt_h)].to_numpy(dtype=float))
+        if len(preds) == 0:
+            st.info("Backtest window too short for selected settings.")
+            return
+        y_true = np.concatenate(actuals)
+        y_pred = np.concatenate(preds)
+        rmse = float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
+        mape = float(np.mean(np.abs((y_true - y_pred) / np.maximum(1.0, y_true))) * 100.0))
+
+        k1, k2 = st.columns(2)
+        with k1:
+            st.metric("RMSE", f"{rmse:,.0f}")
+        with k2:
+            st.metric("MAPE", f"{mape:.1f}%")
+
+        # Error distribution
+        err = y_true - y_pred
+        fige = px.histogram(x=err, nbins=30, title="Forecast errors (y_true − y_pred)")
+        fige.update_layout(height=320)
+        st.plotly_chart(fige, use_container_width=True)
+
+# ───────────────────── Page: Recommendations ─────────────────────
 def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame | None) -> None:
     """Evidence-driven recommendations + KPIs, auto-derived from the current selection (polished UI)."""
 
@@ -3963,6 +4180,9 @@ elif page == "Pareto: Share of Rides":
 
 elif page == "Weekday × Hour Heatmap":
     page_weekday_hour_heatmap(df_f)
+
+elif page == "Time Series — Forecast & Decomposition":
+    page_time_series_forecast(daily_all, daily_f)
 
 elif page == "Recommendations":
     page_recommendations(df_f, daily_f)
