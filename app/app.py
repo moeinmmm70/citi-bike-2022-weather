@@ -1220,19 +1220,6 @@ def _backfill_trip_weather(df_trips: pd.DataFrame, daily_df: pd.DataFrame) -> pd
 
 df_f = _backfill_trip_weather(df_f, daily_all)
 
-# ────────────────────────────── Sidebar footer / credentials ──────────────────────────────
-st.sidebar.markdown("---")
-st.sidebar.markdown("**👤 Moein Mellat, PhD**")
-st.sidebar.markdown(
-    """
-    Environmental Engineer • Data Analyst  
-    [🌐 GitHub](https://github.com/moeinmmm70)  
-    [💼 LinkedIn](https://www.linkedin.com/in/moeinmellat/)  
-    [📧 Email](mailto:moein.mellat@gmail.com)
-    """
-)
-st.sidebar.caption("© 2025 Moein Mellat • Citi Bike NYC Weather Analytics")
-
 # ────────────────────────────── Pages ──────────────────────────────────────
 # ────────────────────────────── Page: Intro ──────────────────────────────
 
@@ -4393,6 +4380,19 @@ elif page == "Time Series — Forecast & Decomposition":
 
 elif page == "Recommendations":
     page_recommendations(df_f, daily_f)
+
+# ────────────────────────────── Sidebar footer / credentials ──────────────────────────────
+st.sidebar.markdown("---")
+st.sidebar.markdown("**👤 Moein Mellat, PhD**")
+st.sidebar.markdown(
+    """
+    Environmental Engineer • Data Analyst  
+    [🌐 GitHub](https://github.com/moeinmmm70)  
+    [💼 LinkedIn](https://www.linkedin.com/in/moeinmellat/)  
+    [📧 Email](mailto:moein.mellat@gmail.com)
+    """
+)
+st.sidebar.caption("© 2025 Moein Mellat • Citi Bike NYC Weather Analytics")
 
 # ────────────────────────────── Footer ─────────────────────────────────────
 st.markdown("---")
