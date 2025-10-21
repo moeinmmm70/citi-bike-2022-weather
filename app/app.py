@@ -473,7 +473,9 @@ def _haversine_km(lat1, lon1, lat2, lon2):
     
 @st.cache_data
 def load_data():
-    return pd.read_csv("data/citibike_2022_cleaned.csv", parse_dates=["starttime", "stoptime"])
+    df = pd.read_csv("data/trips.csv", parse_dates=["start_time", "end_time"])
+    df["date"] = df["start_time"].dt.date
+    return df
 
 df = load_data()
 
