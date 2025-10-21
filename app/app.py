@@ -213,6 +213,44 @@ def _make_heat_grid(
 
     return out
 
+# ── Shared helper: robust quadratic optimum (used by Weather vs Usage page)
+if "_optimal_temp_quadratic" not in globals():
+    def _optimal_temp_quadratic(
+        daily: pd.DataFrame | None,
+        tcol: str = "avg_temp_c",
+        ycol: str = "bike_rides_daily",
+        tmin: float = -5.0,
+        tmax: float = 35.0,
+    ) -> float | None:
+        """
+        Fit Y ~ a2*(T - Tm)^2 + a1*(T - Tm) + a0 (centered for numeric stability).
+        Return vertex temp in °C if concave and inside [tmin, tmax]; else None.
+        """
+        if daily is None or daily.empty or not {tcol, ycol}.issubset(daily.columns):
+            return None
+
+        d = daily[[tcol, ycol]].dropna().copy()
+        d = d[(d[tcol] >= tmin) & (d[tcol] <= tmax)]
+        if len(d) < 20:
+            return None
+
+        T = d[tcol].to_numpy(dtype=float)
+        Y = d[ycol].to_numpy(dtype=float)
+
+        Tm = T.mean()
+        Tc = T - Tm
+
+        a2, a1, a0 = np.polyfit(Tc, Y, 2)  # concave if a2 < 0
+        if a2 >= 0:
+            return None
+
+        Tc_opt = -a1 / (2 * a2)
+        T_opt = float(Tc_opt + Tm)
+
+        if T_opt < tmin or T_opt > tmax:
+            return None
+        return T_opt
+
 # Apply moving-average smoothing across hourly values per weekday
 def _smooth_by_hour(mat: pd.DataFrame, k: int = 3) -> pd.DataFrame:
     """Smooth each weekday's hourly series with a centered moving average (window=k)."""
