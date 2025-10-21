@@ -30,7 +30,7 @@ except Exception:
     
 # ────────────────────────────── Page/Theming ──────────────────────────────
 st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", page_icon="🚲", layout="wide")
-pio.templates.default = "plotly_white"
+pio.templates.default = "ggplot2"
 
 # ────────────────────────────── Paths/Constants ───────────────────────────
 DATA_PATH = Path("data/processed/reduced_citibike_2022.csv")   # ≤25MB sample
