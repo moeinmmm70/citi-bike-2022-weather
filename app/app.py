@@ -32,6 +32,8 @@ except Exception:
 # ────────────────────────────── Page/Theming ──────────────────────────────
 st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", page_icon="🚲", layout="wide")
 pio.templates.default = "plotly_white"
+accent = st.sidebar.selectbox("🎨 Accent", ["blue", "violet", "teal"], index=0, key="rec_accent")
+accent_hex = {"blue":"#60a5fa", "violet":"#a78bfa", "teal":"#2dd4bf"}[accent]
 
 # ────────────────────────────── Paths/Constants ───────────────────────────
 DATA_PATH = Path("data/processed/reduced_citibike_2022.csv")   # ≤25MB sample
@@ -830,7 +832,6 @@ def render_hero_panel(
     )
 
 # ────────────────────────────── Data loading & features ────────────────────
-
 # Small, readable constants
 WEEKDAY_MAP = {"Mon":0,"Tue":1,"Wed":2,"Thu":3,"Fri":4,"Sat":5,"Sun":6}
 SEASON_MAP  = {12:"Winter",1:"Winter",2:"Winter",3:"Spring",4:"Spring",5:"Spring",
@@ -1011,6 +1012,37 @@ def inlier_mask(df: pd.DataFrame, col: str, lo: float = 0.01, hi: float = 0.995)
 # ────────────────────────────── Sidebar / Data ─────────────────────────────
 
 st.sidebar.header("⚙️ Controls")
+
+st.markdown(f"""
+<style>
+/* Auto theme */
+@media (prefers-color-scheme: light) {{
+  :root {{
+    --bg-1: rgba(255,255,255,.9);
+    --bg-2: rgba(248,250,252,.95);
+    --fg-1: #0f172a; --fg-2: #475569; --fg-3: #0f172a;
+    --line: rgba(15,23,42,.10);
+    --accent-1: {accent_hex}; --accent-2: {accent_hex}; --warn: #f59e0b;
+  }}
+  .rec-card {{ background: linear-gradient(180deg, var(--bg-1), var(--bg-2)); }}
+  .step-card {{ background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(248,250,252,.96)); }}
+}}
+@media (prefers-color-scheme: dark) {{
+  :root {{
+    --bg-1: rgba(25,31,40,.82);
+    --bg-2: rgba(16,21,29,.90);
+    --fg-1: #e5e7eb; --fg-2: #94a3b8; --fg-3: #cbd5e1;
+    --line: rgba(255,255,255,.10);
+    --accent-1: {accent_hex}; --accent-2: {accent_hex}; --warn: #f59e0b;
+  }}
+}}
+/* Hover motion + subtle shadow */
+.rec-card, .step-card {{ box-shadow: 0 4px 20px rgba(0,0,0,.06); }}
+.rec-card:hover, .step-card:hover {{ transform: translateY(-1px); transition: transform .08s ease; }}
+/* Section titles tighter */
+h3, h4 {{ margin-top: .4rem; }}
+</style>
+""", unsafe_allow_html=True)
 
 # ---------- Data presence ----------
 if not DATA_PATH.exists():
@@ -3565,12 +3597,6 @@ def page_time_series_forecast(daily_all: pd.DataFrame | None,
     optional SARIMAX(weekly), and De-weathered + Seasonal-Naive.
     Includes rolling-origin backtest for the selected model.
     """
-    import numpy as np
-    import pandas as pd
-    import plotly.graph_objects as go
-    import plotly.express as px
-    import streamlit as st
-
     # Optional deps
     try:
         from statsmodels.tsa.seasonal import STL
@@ -4218,22 +4244,48 @@ def page_recommendations(df_filtered: pd.DataFrame | None,
     st.markdown("#### Executive summary (current selection)")
     cols = st.columns(5)
 
-    def _metric(col, title, val, sub=""):
-        with col:
-            st.markdown(
-                f"""<div class="rec-card">
-                        <div class="rec-title">{title}</div>
-                        <div class="rec-val">{val}</div>
-                        <div class="rec-sub">{sub}</div>
-                    </div>""",
-                unsafe_allow_html=True,
-            )
+    def tiny_sparkline(y, name="7d trend"):
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(y=y, mode="lines", name=name, line=dict(width=2)))
+        fig.update_layout(
+            height=60, margin=dict(l=0, r=0, t=0, b=0),
+            showlegend=False,
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False)
+        )
+        return fig
 
-    _metric(cols[0], "Total trips", f"{kfmt(kpis.get('total_rides', 0))}", "Scope of evidence")
-    _metric(cols[1], "Avg/day", f"{kfmt(kpis.get('avg_day')) if kpis.get('avg_day') else '—'}", "Daily volume")
-    _metric(cols[2], "Temp ↔ rides (r)", f"{kpis['corr_tr']:+.3f}" if kpis.get("corr_tr") is not None else "—", "Daily correlation")
-    _metric(cols[3], "Rain penalty", rain_txt if rain_pen is not None else "—", "Wet vs dry days")
-    _metric(cols[4], "Top-20 share", f"{p_start:.0f}% / {p_end:.0f}%", "Start / End station coverage")
+    # prepare example sparkline for daily rides
+    spark = None
+    if daily_filtered is not None and {"date", "bike_rides_daily"}.issubset(daily_filtered.columns) and len(daily_filtered) > 30:
+        d_sorted = daily_filtered.sort_values("date").tail(60)["bike_rides_daily"].interpolate().to_list()
+        spark = tiny_sparkline(d_sorted)
+
+    def _metric(col, title, val, sub="", spark=None, icon=None):
+    with col:
+        icon_html = f'<span style="opacity:.75;margin-right:.35rem">{icon}</span>' if icon else ""
+        st.markdown(
+            f"""<div class="rec-card">
+                    <div class="rec-title">{icon_html}{title}</div>
+                    <div class="rec-val">{val}</div>
+                    <div class="rec-sub">{sub}</div>
+                </div>""",
+            unsafe_allow_html=True,
+        )
+        if spark is not None:
+            st.plotly_chart(spark, use_container_width=True, config={"displayModeBar": False})
+
+    _metric(cols[0], "Total trips", f"{kfmt(kpis.get('total_rides', 0))}",
+            "Scope of evidence", spark=spark, icon="🚲")
+    _metric(cols[1], "Avg/day", f"{kfmt(kpis.get('avg_day')) if kpis.get('avg_day') else '—'}",
+            "Daily volume", icon="📈")
+    _metric(cols[2], "Temp ↔ rides (r)",
+            f"{kpis['corr_tr']:+.3f}" if kpis.get("corr_tr") is not None else "—",
+            "Daily correlation", icon="🌡️")
+    _metric(cols[3], "Rain penalty",
+            rain_txt if rain_pen is not None else "—", "Wet vs dry days", icon="🌧️")
+    _metric(cols[4], "Top-20 share",
+            f"{p_start:.0f}% / {p_end:.0f}%", "Start / End station coverage", icon="⭐")
 
     # ── Insights callout
     bullets = []
