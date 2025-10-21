@@ -1305,17 +1305,6 @@ def page_intro(
     c4.info("**Time patterns**\n\nWeekday×Hour heatmap + marginal profiles for staffing windows.")
     st.caption("Use the sidebar filters; every view updates live.")
 
-if page == "Intro":
-    page_intro(
-        df_filtered=df_f,
-        daily_filtered=daily_f,
-        date_range=date_range,
-        seasons=seasons,
-        usertype=usertype,
-        hour_range=hour_range,
-        cover_path=cover_path,  # or None if you don't want the cover
-    )
-
 # ────────────────────────────── Page: Weather vs Bike Usage ──────────────────────────────
 
 def _rolling_cols(d: pd.DataFrame, cols: list[str], win: int) -> pd.DataFrame:
@@ -1678,6 +1667,20 @@ def page_weather_vs_usage(daily_filtered: pd.DataFrame) -> None:
             st.metric("Avg residual (last 30 days)", f"{dd.tail(30)['resid_pct'].mean():+.1f}%")
             with st.expander("Model drivers (top |β|)"):
                 st.write(coefs.sort_values(key=np.abs, ascending=False).head(10).round(3))
+
+
+# --- Page routing (place this after defining all page_* functions) ---
+
+if page == "Intro":
+    page_intro(
+        df_filtered=df_f,
+        daily_filtered=daily_f,
+        date_range=date_range,
+        seasons=seasons,
+        usertype=usertype,
+        hour_range=hour_range,
+        cover_path=cover_path,
+    )
 
 elif page == "Weather vs Bike Usage":
     page_weather_vs_usage(daily_f)
