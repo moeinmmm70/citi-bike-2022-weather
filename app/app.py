@@ -3771,8 +3771,8 @@ def page_time_series_forecast(daily_all: pd.DataFrame | None,
         y_true = np.concatenate(actuals)
         y_pred = np.concatenate(preds)
         rmse = float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
-        mape = float(np.mean(np.abs((y_true - y_pred) / np.maximum(1.0, y_true))) * 100.0))
-
+        mape = float(np.mean(np.abs((y_true - y_pred) / np.maximum(1.0, y_true))) * 100.0)
+        
         k1, k2 = st.columns(2)
         with k1:
             st.metric("RMSE", f"{rmse:,.0f}")
