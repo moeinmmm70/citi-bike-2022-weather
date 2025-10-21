@@ -1220,6 +1220,36 @@ def _backfill_trip_weather(df_trips: pd.DataFrame, daily_df: pd.DataFrame) -> pd
 
 df_f = _backfill_trip_weather(df_f, daily_all)
 
+# ────────────────────────────── Sidebar forecasting controls ──────────────────────────────
+st.sidebar.markdown("### ⏱ TS Controls")
+horizon = st.sidebar.slider("Forecast horizon (days)", 7, 60, 21, 1)
+show_last_n = st.sidebar.slider("Plot history window (days)", 60, 365, 180, 10)
+
+model_name = st.sidebar.selectbox(
+    "Model",
+    [
+        "Seasonal-Naive (t−7)", 
+        "Naive (t−1)",
+        "7-day Moving Average",
+        "SARIMAX (weekly)",
+        "De-weathered + Seasonal-Naive",
+    ],
+    index=0
+)
+
+if model_name == "SARIMAX (weekly)" and not HAS_SARIMAX:
+st.sidebar.warning("`statsmodels` not available — SARIMAX disabled")
+if model_name == "De-weathered + Seasonal-Naive" and t is None:
+st.sidebar.warning("No temperature column found — de-weathered option will fallback to Seasonal-Naive.")
+
+# Future weather assumption for de-weathered model
+if model_name == "De-weathered + Seasonal-Naive":
+    fut_temp_assume = st.sidebar.selectbox(
+        "Future temperature assumption",
+        ["Repeat last 7 days", "Hold last day"],
+          index=0
+    )
+
 # ────────────────────────────── Sidebar footer / credentials ──────────────────────────────
 st.sidebar.markdown("---")
 st.sidebar.markdown("**👤 Moein Mellat, PhD**")
@@ -3625,37 +3655,7 @@ def page_time_series_forecast(daily_all: pd.DataFrame | None,
         t = t.reindex(s.index).interpolate(limit_direction="both")
 
     st.caption(f"Series coverage: **{len(s):,} days** — {int(np.isfinite(s).sum())} usable after interpolation")
-
-    # ----- Sidebar controls -----
-    st.sidebar.markdown("### ⏱ TS Controls")
-    horizon = st.sidebar.slider("Forecast horizon (days)", 7, 60, 21, 1)
-    show_last_n = st.sidebar.slider("Plot history window (days)", 60, 365, 180, 10)
-
-    model_name = st.sidebar.selectbox(
-        "Model",
-        [
-            "Seasonal-Naive (t−7)",
-            "Naive (t−1)",
-            "7-day Moving Average",
-            "SARIMAX (weekly)",
-            "De-weathered + Seasonal-Naive",
-        ],
-        index=0
-    )
-
-    if model_name == "SARIMAX (weekly)" and not HAS_SARIMAX:
-        st.sidebar.warning("`statsmodels` not available — SARIMAX disabled")
-    if model_name == "De-weathered + Seasonal-Naive" and t is None:
-        st.sidebar.warning("No temperature column found — de-weathered option will fallback to Seasonal-Naive.")
-
-    # Future weather assumption for de-weathered model
-    if model_name == "De-weathered + Seasonal-Naive":
-        fut_temp_assume = st.sidebar.selectbox(
-            "Future temperature assumption",
-            ["Repeat last 7 days", "Hold last day"],
-            index=0
-        )
-
+    
     # ----- Helpers -----
     def _pi_from_resid(fc: np.ndarray, resid: np.ndarray, alpha: float = 0.10) -> tuple[np.ndarray, np.ndarray]:
         resid = resid[np.isfinite(resid)]
