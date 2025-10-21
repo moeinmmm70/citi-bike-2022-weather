@@ -14,6 +14,7 @@ from plotly.subplots import make_subplots
 import plotly.io as pio
 from urllib.parse import quote, unquote
 import unicodedata
+import hashlib
 try:
     from sklearn.linear_model import LinearRegression
 except Exception:
@@ -51,7 +52,9 @@ MEMBER_LABELS = {
 MEMBER_LEGEND_TITLE = "Member Type"
 
 # ────────────────────────────── Helpers ───────────────────────────────────
+# Compact number formatter
 def kfmt(x):
+    """Format numbers like 1200 → 1.2K, 5_000_000 → 5.0M."""
     try:
         x = float(x)
     except Exception:
@@ -62,224 +65,476 @@ def kfmt(x):
             return f"{x:,.0f}{u}" if u == "" else f"{x:.1f}{u}"
         x /= 1000.0
 
+# Shorten long strings with ellipsis
 def shorten_name(s: str, max_len: int = 22) -> str:
+    """Trim strings longer than max_len, e.g. 'Central Park West...'."""
     if not isinstance(s, str):
         return str(s)
     return s if len(s) <= max_len else s[: max_len - 1] + "…"
 
+# Apply readable axis titles and layout to Plotly figures
 def friendly_axis(fig, x=None, y=None, title=None, colorbar=None):
-    if x: fig.update_xaxes(title_text=x)
-    if y: fig.update_yaxes(title_text=y)
-    if title: fig.update_layout(title=title)
+    """Add friendly axis and colorbar titles to Plotly figures."""
+    if x:
+        fig.update_xaxes(title_text=x)
+    if y:
+        fig.update_yaxes(title_text=y)
+    if title:
+        fig.update_layout(title=title)
     if colorbar and hasattr(fig, "data"):
         for tr in fig.data:
             if hasattr(tr, "colorbar") and tr.colorbar:
                 tr.colorbar.title = colorbar
 
+# Compute correlation safely (handles NaNs, small samples)
 def safe_corr(a: pd.Series, b: pd.Series) -> float | None:
+    """Return Pearson correlation or None if insufficient overlap."""
     a, b = a.dropna(), b.dropna()
     j = a.index.intersection(b.index)
     if len(j) < 3:
         return None
-    c = np.corrcoef(a.loc[j], b.loc[j])[0,1]
+    c = np.corrcoef(a.loc[j], b.loc[j])[0, 1]
     return float(c)
 
+# Simple linear regression fit (returns slope, intercept, and predictor)
 def linear_fit(x: pd.Series, y: pd.Series):
+    """Return slope, intercept, and a prediction function y = a*x + b."""
     valid = (~x.isna()) & (~y.isna())
     x, y = x[valid], y[valid]
     if len(x) < 2:
         return None, None, lambda z: np.nan
     a, b = np.polyfit(x, y, 1)
-    return float(a), float(b), (lambda z: a * np.asarray(z) + b)
+    return float(a), float(b), lambda z: a * np.asarray(z) + b
 
+# Display project cover image with fallback handling
 def show_cover(cover_path: Path):
+    """Show the dashboard cover image with caption; warn if missing."""
     if not cover_path.exists():
-        st.warning("Cover image not found at reports/cover_bike.webp")
+        st.warning("⚠️ Cover image not found at reports/cover_bike.webp")
         return
+    caption = (
+        "🚲 Exploring one year of bike sharing in New York City. "
+        "Photo © citibikenyc.com"
+    )
     try:
-        st.image(str(cover_path), use_container_width=True,
-                 caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com")
-    except TypeError:
-        st.image(str(cover_path), use_column_width=True,
-                 caption="🚲 Exploring one year of bike sharing in New York City. Photo © citibikenyc.com")
+        st.image(str(cover_path), use_container_width=True, caption=caption)
+    except TypeError:  # for older Streamlit versions
+        st.image(str(cover_path), use_column_width=True, caption=caption)
+
+# Bin hour values (0–23) into uniform time buckets
 def _bin_hour(h: pd.Series, bin_size: int) -> pd.Series:
-    # Bin 0-23 into 1/2/3-hr buckets
+    """Group hours into bins of given size (e.g., 2h → 0,2,4,...,22)."""
     b = (h // bin_size) * bin_size
     return b.clip(0, 23)
 
+# Map weekday index (0–6) to short names
 def _weekday_name(idx: pd.Series) -> pd.Series:
-    return idx.map({0:"Mon",1:"Tue",2:"Wed",3:"Thu",4:"Fri",5:"Sat",6:"Sun"})
+    """Convert weekday numbers to labels: 0→Mon, 6→Sun."""
+    return idx.map({0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"})
 
-def _make_heat_grid(df: pd.DataFrame,
-                    hour_col="hour",
-                    weekday_col="weekday",
-                    hour_bin: int = 1,
-                    scale: str = "Absolute") -> pd.DataFrame:
+# Build a 7 × (24/hour_bin) heat grid with optional scaling
+def _make_heat_grid(
+    df: pd.DataFrame,
+    hour_col: str = "hour",
+    weekday_col: str = "weekday",
+    hour_bin: int = 1,
+    scale: str = "Absolute",          # {"Absolute","Row %","Column %","Z-score"}
+    value_col: str | None = None,     # if None → count rows; else aggregate this column
+    agg: str = "sum",                 # used when value_col is not None
+    label_weekdays: bool = False      # map 0..6 → Mon..Sun at the end
+) -> pd.DataFrame:
     """
-    Returns a 7 x (24/hr_bin) grid with chosen scaling.
-    scale ∈ {"Absolute", "Row %", "Column %", "Z-score"}.
+    Return a heat grid of shape (7, 24/hour_bin) from df using hour & weekday columns.
+
+    - Accepts numeric weekday (0=Mon..6=Sun) OR datetime-like in `weekday_col`.
+    - If `value_col` is None → counts trips; else aggregates `value_col` with `agg`.
+    - `scale`: "Absolute" (int), "Row %", "Column %", "Z-score" (rowwise).
     """
+    # Basic checks
+    if hour_bin < 1 or 24 % hour_bin != 0:
+        # bad bin size → nothing to do
+        return pd.DataFrame()
+
     if hour_col not in df.columns or weekday_col not in df.columns:
         return pd.DataFrame()
 
-    d = df[[hour_col, weekday_col]].dropna().copy()
-    d[hour_col] = _bin_hour(d[hour_col].astype(int), hour_bin)
-    # count rides
-    g = d.groupby([weekday_col, hour_col]).size().rename("rides").reset_index()
-    # build full matrix (fill missing cells with 0)
+    d = df[[hour_col, weekday_col] + ([value_col] if value_col else [])].dropna().copy()
+
+    # Extract weekday if datetime-like provided
+    if pd.api.types.is_datetime64_any_dtype(d[weekday_col]) or hasattr(d[weekday_col], "dt"):
+        d[weekday_col] = d[weekday_col].dt.weekday
+
+    # Enforce integer hour within 0..23 and bin
+    h = pd.to_numeric(d[hour_col], errors="coerce").fillna(-1).astype(int)
+    d[hour_col] = _bin_hour(h.clip(0, 23), hour_bin)
+
+    # Enforce weekday 0..6 and categorical ordering
+    wd = pd.to_numeric(d[weekday_col], errors="coerce").astype("Int64")
+    d[weekday_col] = wd.clip(lower=0, upper=6).astype("Int64")
+    d = d.dropna(subset=[weekday_col])  # in case of all-NaN after coercion
+
+    # Group → either count or aggregate a value column
+    if value_col is None:
+        g = d.groupby([weekday_col, hour_col], observed=True).size().rename("val").reset_index()
+    else:
+        g = (
+            d.groupby([weekday_col, hour_col], observed=True)[value_col]
+              .agg(agg)
+              .rename("val")
+              .reset_index()
+        )
+
+    # Full grid with all weekdays/hours present
     hours = list(range(0, 24, hour_bin))
-    mat = (g.pivot(index=weekday_col, columns=hour_col, values="rides")
-             .reindex(index=range(0,7), columns=hours)
-             .fillna(0))
+    weekdays = list(range(0, 7))
+    mat = (
+        g.pivot(index=weekday_col, columns=hour_col, values="val")
+         .reindex(index=weekdays, columns=hours, fill_value=0)
+    )
 
     if scale == "Absolute":
-        return mat
-
-    if scale == "Row %":
-        # Normalize by weekday (row)
-        row_sum = mat.sum(axis=1).replace(0, np.nan)
-        return (mat.div(row_sum, axis=0) * 100).fillna(0)
-
-    if scale == "Column %":
-        # Normalize by hour (column)
-        col_sum = mat.sum(axis=0).replace(0, np.nan)
-        return (mat.div(col_sum, axis=1) * 100).fillna(0)
-
-    if scale == "Z-score":
-        # Center/scale per row (weekday)
+        out = mat.astype(int)
+    elif scale == "Row %":
+        denom = mat.sum(axis=1).replace(0, np.nan)
+        out = (mat.div(denom, axis=0) * 100).fillna(0)
+    elif scale == "Column %":
+        denom = mat.sum(axis=0).replace(0, np.nan)
+        out = (mat.div(denom, axis=1) * 100).fillna(0)
+    elif scale == "Z-score":
         m = mat.mean(axis=1)
         s = mat.std(axis=1).replace(0, np.nan)
-        return ((mat.sub(m, axis=0)).div(s, axis=0)).fillna(0)
+        out = ((mat.sub(m, axis=0)).div(s, axis=0)).fillna(0)
+    else:
+        # Unknown scale → return absolute
+        out = mat.astype(int)
 
-    return mat
+    if label_weekdays:
+        out.index = _weekday_name(pd.Series(out.index)).values
 
+    return out
+
+# Apply moving-average smoothing across hourly values per weekday
 def _smooth_by_hour(mat: pd.DataFrame, k: int = 3) -> pd.DataFrame:
-    """Simple 1D moving-average smoothing across hours per weekday (window k, odd)."""
+    """Smooth each weekday's hourly series with a centered moving average (window=k)."""
     if mat.empty or k <= 1:
         return mat
+
+    # Ensure odd integer window
     k = max(1, int(k))
     if k % 2 == 0:
         k += 1
-    out = mat.copy()
-    for i in out.index:
-        row = out.loc[i].values
-        s = pd.Series(row).rolling(k, center=True, min_periods=max(1, k//2)).mean().to_numpy()
-        out.loc[i] = s
-    return out
 
-def _add_peak_annotation(fig, mat: pd.DataFrame, title_suffix=""):
-    # find max cell; annotate
+    out = mat.copy()
+    half = max(1, k // 2)
+
+    for idx, row in out.iterrows():
+        smoothed = row.rolling(window=k, center=True, min_periods=half).mean()
+        out.loc[idx] = smoothed.values
+
+    return out
+    
+# Add annotation for peak cell in heatmap (max value)
+def _add_peak_annotation(fig, mat: pd.DataFrame, title_suffix: str = ""):
+    """Annotate the heatmap with the weekday–hour peak cell and value."""
     if mat.empty:
         return fig
-    idx = np.unravel_index(np.nanargmax(mat.values), mat.shape)
-    r, c = idx[0], idx[1]
-    wk = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][r]
+
+    # Identify position of maximum value
+    try:
+        r, c = np.unravel_index(np.nanargmax(mat.values), mat.shape)
+    except ValueError:
+        return fig  # handle all-NaN case gracefully
+
+    weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    wk = weekdays[r] if r < len(weekdays) else str(r)
     hr = mat.columns[c]
     val = mat.iloc[r, c]
-    fig.add_annotation(
-        x=c, y=r, text=f"Peak: {wk} {hr:02d}:00<br>{val:,.0f}" if np.isfinite(val) else "Peak",
-        showarrow=True, arrowhead=2, ax=40, ay=-40, bgcolor="rgba(0,0,0,0.6)", font=dict(color="white", size=11)
+
+    label = (
+        f"Peak: {wk} {hr:02d}:00<br>{val:,.0f}"
+        if np.isfinite(val)
+        else "Peak"
     )
+
+    fig.add_annotation(
+        x=c,
+        y=r,
+        text=label,
+        showarrow=True,
+        arrowhead=2,
+        ax=40,
+        ay=-40,
+        bgcolor="rgba(0,0,0,0.6)",
+        font=dict(color="white", size=11)
+    )
+
+    # Safely update the title if it exists
     if title_suffix:
-        fig.update_layout(title=fig.layout.title.text + title_suffix)
+        current_title = fig.layout.title.text or ""
+        fig.update_layout(title=f"{current_title}{title_suffix}")
+
     return fig
 
+# Filter DataFrame by time-of-day or weekday mode
 def _time_slice(df: pd.DataFrame, mode: str) -> pd.DataFrame:
+    """Return subset of data by selected mode: AM, PM, Weekday, or Weekend."""
     if "hour" not in df.columns or "weekday" not in df.columns:
         return df
-    if mode == "AM (06–11)":   return df[(df["hour"] >= 6)  & (df["hour"] <= 11)]
-    if mode == "PM (16–20)":   return df[(df["hour"] >= 16) & (df["hour"] <= 20)]
-    if mode == "Weekend":      return df[df["weekday"].isin([5,6])]
-    if mode == "Weekday":      return df[df["weekday"].isin([0,1,2,3,4])]
-    return df
 
-def _build_od_edges(df: pd.DataFrame,
-                    per_origin: bool,
-                    topk: int,
-                    min_rides: int,
-                    drop_self_loops: bool,
-                    member_split: bool) -> pd.DataFrame:
-    # Guard
+    match mode:
+        case "AM (06–11)":
+            return df[(df["hour"] >= 6) & (df["hour"] <= 11)]
+        case "PM (16–20)":
+            return df[(df["hour"] >= 16) & (df["hour"] <= 20)]
+        case "Weekend":
+            return df[df["weekday"].isin([5, 6])]
+        case "Weekday":
+            return df[df["weekday"].isin([0, 1, 2, 3, 4])]
+        case _:
+            return df
+
+# Build OD edge list with optional per-origin top-k, thresholds, and member split
+def _build_od_edges(
+    df: pd.DataFrame,
+    per_origin: bool,
+    topk: int,
+    min_rides: int,
+    drop_self_loops: bool,
+    member_split: bool
+) -> pd.DataFrame:
+    """
+    Return OD edges with ride counts (and optional median distance/duration).
+    - per_origin: top-k per start station (and member type if split)
+    - topk: number of edges to keep (global or per-origin)
+    - min_rides: drop edges below this count
+    - drop_self_loops: remove start==end
+    - member_split: split groups by `member_type_display` if present
+    """
     need = {"start_station_name", "end_station_name"}
-    if not need.issubset(df.columns) or df.empty:
-        return pd.DataFrame(columns=["start_station_name","end_station_name","rides"])
+    if df.empty or not need.issubset(df.columns):
+        return pd.DataFrame(columns=["start_station_name", "end_station_name", "rides"])
+
+    # Clean/normalize names; blank → NaN
+    d = df.copy()
+    for col in ["start_station_name", "end_station_name"]:
+        d[col] = (
+            d[col]
+            .astype("string", copy=False)
+            .str.strip()
+            .replace({"": pd.NA})
+        )
 
     gb_cols = ["start_station_name", "end_station_name"]
-    if member_split and "member_type_display" in df.columns:
+    if member_split and "member_type_display" in d.columns:
         gb_cols.append("member_type_display")
 
-    # Count rides
-    g = (df.dropna(subset=["start_station_name","end_station_name"])
-           .groupby(gb_cols).size().rename("rides").reset_index())
+    # Drop rows with missing endpoints
+    d = d.dropna(subset=["start_station_name", "end_station_name"])
+    if d.empty:
+        return pd.DataFrame(columns=gb_cols + ["rides"])
 
-    # Optional medians if available
-    if "distance_km" in df.columns:
-        med_dist = df.groupby(gb_cols)["distance_km"].median().reset_index(name="med_distance_km")
+    # Count rides
+    g = (
+        d.groupby(gb_cols, observed=True)
+         .size()
+         .rename("rides")
+         .reset_index()
+    )
+
+    # Optional medians (only if numeric)
+    if "distance_km" in d.columns and pd.api.types.is_numeric_dtype(d["distance_km"]):
+        med_dist = (
+            d.groupby(gb_cols, observed=True)["distance_km"]
+             .median()
+             .reset_index(name="med_distance_km")
+        )
         g = g.merge(med_dist, on=gb_cols, how="left")
-    if "duration_min" in df.columns:
-        med_dur = df.groupby(gb_cols)["duration_min"].median().reset_index(name="med_duration_min")
+
+    if "duration_min" in d.columns and pd.api.types.is_numeric_dtype(d["duration_min"]):
+        med_dur = (
+            d.groupby(gb_cols, observed=True)["duration_min"]
+             .median()
+             .reset_index(name="med_duration_min")
+        )
         g = g.merge(med_dur, on=gb_cols, how="left")
 
-    # Drop self-loops (cast to str to be safe)
+    # Drop self loops
     if drop_self_loops and not g.empty:
-        s = g["start_station_name"].astype(str)
-        e = g["end_station_name"].astype(str)
-        g = g[s != e]
+        g = g[g["start_station_name"] != g["end_station_name"]]
 
     # Threshold
     g = g[g["rides"] >= int(min_rides)]
     if g.empty:
         return g
 
-    # Top-k selection
-    if per_origin:
-        by = ["start_station_name"]
-        if "member_type_display" in g.columns and member_split:
-            by.append("member_type_display")
-        g = (g.sort_values("rides", ascending=False)
-               .groupby(by, as_index=False)
-               .head(int(topk)))
-    else:
-        g = g.sort_values("rides", ascending=False).head(int(topk))
+    # Deterministic order (ties broken by names)
+    sort_keys = ["rides"] + gb_cols
+    g = g.sort_values(sort_keys, ascending=[False] + [True] * len(gb_cols), kind="mergesort")
 
+    # Top-k selection
+    topk = int(topk)
+    if topk > 0:
+        if per_origin:
+            by = ["start_station_name"]
+            if member_split and "member_type_display" in g.columns:
+                by.append("member_type_display")
+            # Use nlargest per group (fast + stable with mergesort pre-sort)
+            g = (
+                g.groupby(by, group_keys=False, observed=True)
+                 .apply(lambda x: x.nlargest(topk, columns="rides"))
+                 .reset_index(drop=True)
+            )
+        else:
+            g = g.head(topk)
+
+    # Keep integer dtype for rides
+    g["rides"] = g["rides"].astype("int64", copy=False)
     return g.reset_index(drop=True)
 
-@st.cache_data(show_spinner=False)
-def _cached_edges(df: pd.DataFrame,
-                  per_origin: bool,
-                  topk: int,
-                  min_rides: int,
-                  drop_self_loops: bool,
-                  member_split: bool) -> pd.DataFrame:
+# Cache OD edges; cache key depends only on the columns that matter
+@st.cache_data(
+    show_spinner=False,
+    ttl=3600,  # 1h
+    hash_funcs={
+        pd.DataFrame: lambda d: hashlib.sha1(
+            pd.util.hash_pandas_object(
+                d.reindex(columns=[
+                    "start_station_name", "end_station_name",
+                    "member_type_display", "distance_km", "duration_min"
+                ], fill_value=None),
+                index=True
+            ).values.tobytes()
+        ).hexdigest()
+    },
+)
+def _cached_edges(
+    df: pd.DataFrame,
+    per_origin: bool,
+    topk: int,
+    min_rides: int,
+    drop_self_loops: bool,
+    member_split: bool
+) -> pd.DataFrame:
+    """Cached wrapper around _build_od_edges with safe fallbacks."""
     try:
+        if df is None or df.empty:
+            return pd.DataFrame(columns=["start_station_name","end_station_name","rides"])
+        # normalize numerics to avoid cache key fragmentation
+        topk = int(topk)
+        min_rides = int(min_rides)
         return _build_od_edges(df, per_origin, topk, min_rides, drop_self_loops, member_split)
     except Exception as e:
         st.warning(f"Edge build failed: {e}")
         return pd.DataFrame(columns=["start_station_name","end_station_name","rides"])
 
-def _matrix_from_edges(edges: pd.DataFrame, member_split: bool) -> pd.DataFrame:
-    if edges.empty: return pd.DataFrame()
+# Build OD matrix (rows=start, cols=end) from edge list
+def _matrix_from_edges(
+    edges: pd.DataFrame,
+    member_split: bool,
+    topn_rows: int | None = None,
+    topn_cols: int | None = None
+) -> pd.DataFrame:
+    """
+    Return an OD matrix of rides. If member_split is True and the column exists,
+    edges are summed across member types before pivoting.
+
+    Options:
+      - topn_rows / topn_cols: keep only the top-N rows/cols by total (for readability).
+    """
+    if edges is None or edges.empty:
+        return pd.DataFrame()
+
+    need = {"start_station_name", "end_station_name", "rides"}
+    if not need.issubset(edges.columns):
+        return pd.DataFrame()
+
     base = edges.copy()
+
+    # Clean station names; blank → NaN
+    for col in ["start_station_name", "end_station_name"]:
+        base[col] = (
+            base[col].astype("string", copy=False)
+                     .str.strip()
+                     .replace({"": pd.NA})
+        )
+    base = base.dropna(subset=["start_station_name", "end_station_name"])
+
+    # Collapse member types if requested
+    gb_cols = ["start_station_name", "end_station_name"]
     if member_split and "member_type_display" in base.columns:
-        base = base.groupby(["start_station_name","end_station_name"], as_index=False)["rides"].sum()
-    mat = (base.pivot(index="start_station_name", columns="end_station_name", values="rides").fillna(0))
-    # order for readability
-    mat = mat.loc[mat.sum(axis=1).sort_values(ascending=False).index,
-                  mat.sum(axis=0).sort_values(ascending=False).index]
+        base = (
+            base.groupby(gb_cols, observed=True)["rides"]
+                .sum()
+                .reset_index()
+        )
+
+    # Pivot (robust to accidental duplicates)
+    mat = (
+        base.pivot_table(
+            index="start_station_name",
+            columns="end_station_name",
+            values="rides",
+            aggfunc="sum",
+            fill_value=0,
+            observed=True
+        )
+    )
+
+    if mat.empty:
+        return mat
+
+    # Deterministic ordering: by totals desc, then alphabetical
+    row_tot = mat.sum(axis=1)
+    col_tot = mat.sum(axis=0)
+
+    mat = (
+        mat.loc[
+            row_tot.sort_values(ascending=False)
+                   .index.sort_values(kind="mergesort"),  # stable secondary
+            col_tot.sort_values(ascending=False)
+                   .index.sort_values(kind="mergesort")
+        ]
+    )
+
+    # Optional top-N trimming for readability
+    if isinstance(topn_rows, int) and topn_rows > 0:
+        mat = mat.iloc[:topn_rows, :]
+    if isinstance(topn_cols, int) and topn_cols > 0:
+        mat = mat.iloc[:, :topn_cols]
+
     return mat
 
-def _one_hot(s, prefix):
-    s = s.astype("int64")
+# One-hot encode a categorical/boolean Series with guaranteed output
+def _one_hot(s: pd.Series, prefix: str) -> pd.DataFrame:
+    """Return one-hot encoded DataFrame (drop_first=True) with a stable fallback."""
+    if s is None or s.empty:
+        return pd.DataFrame({f"{prefix}_0": []})
+
+    # Coerce to int where possible; fallback to string to handle unexpected values
+    try:
+        s = s.astype("int64")
+    except (ValueError, TypeError):
+        s = s.astype("string")
+
     d = pd.get_dummies(s, prefix=prefix, drop_first=True)
+
+    # Ensure stability: always at least one column
     if d.shape[1] == 0:
-        # Ensure at least one column for stability
         d[f"{prefix}_0"] = 0
+
     return d
 
-def deweather_fit_predict(df_in: pd.DataFrame):
+def deweather_fit_predict(
+    df_in: pd.DataFrame,
+    ridge_alpha: float = 0.0,     # 0 = OLS; >0 = Ridge
+    clip_nonneg: bool = True      # clamp yhat to >= 0
+):
     """
-    Fit a simple 'expected rides' model on rows where y is known, then predict for all rows.
-    Returns: (yhat_all: pd.Series, resid_pct: pd.Series, coefs: pd.Series) or None if not enough data.
+    Fit an 'expected rides' model where bike_rides_daily is known; predict for all rows.
+
+    Returns:
+        (yhat_all: pd.Series, resid_pct: pd.Series, coefs: pd.Series, r2: float | None)
+        or None if not enough data.
     """
     need = {"bike_rides_daily", "avg_temp_c"}
     if df_in is None or df_in.empty or not need.issubset(df_in.columns):
@@ -294,8 +549,8 @@ def deweather_fit_predict(df_in: pd.DataFrame):
     if train_mask.sum() < 10:
         return None
 
-    # ---------- feature builder (keeps columns consistent across train/predict) ----------
-    def _build_X(frame: pd.DataFrame, wd_cols: list[str] | None = None):
+    # ---------- feature builder (consistent columns across train/predict) ----------
+    def _build_X(frame: pd.DataFrame):
         n = len(frame)
         parts = []
         names = []
@@ -309,7 +564,7 @@ def deweather_fit_predict(df_in: pd.DataFrame):
         # Intercept
         add_col(np.ones(n), "intercept")
 
-        # Temp + quad
+        # Temp + quadratic
         tt = pd.to_numeric(frame["avg_temp_c"], errors="coerce")
         add_col(tt, "temp_c")
         add_col(tt**2, "temp_c_sq")
@@ -320,63 +575,92 @@ def deweather_fit_predict(df_in: pd.DataFrame):
         if "wind_kph" in frame.columns:
             add_col(frame["wind_kph"], "wind_kph")
         if "wet_day" in frame.columns:
-            # 0/1 as float
-            add_col(frame["wet_day"], "wet_day")
+            add_col(frame["wet_day"], "wet_day")  # expect 0/1
 
-        # Weekday dummies (no drop-first; least squares handles redundancy)
-        if "date" in frame.columns and pd.api.types.is_datetime64_any_dtype(frame["date"]):
-            wd = frame["date"].dt.weekday.astype("Int64").fillna(0).astype(int)
+        # Weekday dummies (fixed columns wd_0..wd_6)
+        wd = None
+        if "date" in frame.columns:
+            if not pd.api.types.is_datetime64_any_dtype(frame["date"]):
+                # try to parse if not datetime
+                frame = frame.copy()
+                frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+            if pd.api.types.is_datetime64_any_dtype(frame["date"]):
+                wd = frame["date"].dt.weekday
+
+        if wd is not None:
+            wd = wd.fillna(0).astype(int).clip(0, 6)
             W = pd.get_dummies(wd, prefix="wd").astype(float)
-            if wd_cols is not None:
-                # ensure same dummy columns at predict time
-                W = W.reindex(columns=wd_cols, fill_value=0.0)
-            wd_cols_out = list(W.columns)
-            if len(wd_cols_out):
+            # ensure fixed set of weekday columns
+            fixed_cols = [f"wd_{i}" for i in range(7)]
+            W = W.reindex(columns=fixed_cols, fill_value=0.0)
+            if len(W.columns):
                 parts.append(W.to_numpy(dtype=float))
-                names.extend(wd_cols_out)
-        else:
-            wd_cols_out = []
+                names.extend(list(W.columns))
 
         X = np.hstack(parts).astype(float)
-        # clean any remaining bad values
         X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
-        return X, names, wd_cols_out
+        return X, names
 
-    # --- Build train design matrix (captures weekday cols) ---
-    X_train, names, wd_cols = _build_X(df.loc[train_mask], wd_cols=None)
+    # --- Build train design matrix ---
+    X_train, names = _build_X(df.loc[train_mask])
     y_train = y.loc[train_mask].to_numpy(dtype=float)
+
     good = np.isfinite(y_train).flatten() & np.isfinite(X_train).all(axis=1)
     if good.sum() < 10:
         return None
     X_train = X_train[good]
     y_train = y_train[good]
 
-    # --- Fit (robust to singularity) ---
-    beta, *_ = np.linalg.lstsq(X_train, y_train, rcond=None)
+    # --- Fit (OLS or Ridge) ---
+    if ridge_alpha and ridge_alpha > 0:
+        # Ridge: beta = (X'X + αI)^(-1) X'y (don't penalize intercept)
+        XtX = X_train.T @ X_train
+        I = np.eye(XtX.shape[0])
+        I[0, 0] = 0.0  # don't penalize intercept
+        beta = np.linalg.pinv(XtX + ridge_alpha * I) @ (X_train.T @ y_train)
+    else:
+        beta, *_ = np.linalg.lstsq(X_train, y_train, rcond=None)
+
     coefs = pd.Series(beta, index=names)
 
     # --- Predict for ALL rows with the same columns ---
-    X_all, _, _ = _build_X(df, wd_cols=wd_cols)
+    X_all, _ = _build_X(df)
     yhat_all = pd.Series(X_all @ beta, index=df.index)
+    if clip_nonneg:
+        yhat_all = yhat_all.clip(lower=0)
 
     # --- Residuals (% vs expected) only where y is known ---
     resid = pd.Series(np.nan, index=df.index, dtype=float)
     resid.loc[train_mask] = y.loc[train_mask] - yhat_all.loc[train_mask]
-    denom = yhat_all.copy()
-    denom.replace(0, np.nan, inplace=True)
+    denom = yhat_all.replace(0, np.nan)
     resid_pct = 100.0 * (resid / denom)
 
-    return yhat_all, resid_pct, coefs
+    # --- Train R² for quick diagnostics ---
+    try:
+        y_hat_tr = (X_train @ beta)
+        ss_res = float(np.sum((y_train - y_hat_tr) ** 2))
+        ss_tot = float(np.sum((y_train - y_train.mean()) ** 2))
+        r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else None
+    except Exception:
+        r2 = None
 
+    return yhat_all, resid_pct, coefs, r2
+
+# Normalize text: remove accents/emojis, collapse spaces, lowercase
 def _slug(s: str) -> str:
+    """Return a clean lowercase ASCII slug (no accents, extra spaces, or emojis)."""
     if s is None:
         return ""
-    # strip emojis/accents, collapse spaces, lowercase
-    s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode()
+    s = str(s)
+    # Strip accents and emojis
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii", "ignore")
+    # Collapse multiple spaces and lowercase
     return " ".join(s.split()).lower()
 
-# UI helpers (Intro hero + KPI cards)
+# ──────────────── UI Helpers (Hero Panel + KPI Cards) ────────────────
+
 def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
+    """Render a stylized KPI card with title, main value, and optional subtitle."""
     st.markdown(
         f"""
         <div class="kpi-card">
@@ -388,31 +672,36 @@ def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
         unsafe_allow_html=True,
     )
 
-def render_hero_panel():
+
+def render_hero_panel(
+    title: str = "NYC Citi Bike — Strategy Dashboard",
+    subtitle: str = "Seasonality • Weather–demand correlation • Station intelligence • Time patterns"
+):
+    """Render the top hero panel with title and subtitle."""
     st.markdown(
-        """
+        f"""
         <style>
-        .hero-panel {
+        .hero-panel {{
             background: linear-gradient(180deg, rgba(18,22,28,0.95) 0%, rgba(18,22,28,0.86) 100%);
             border: 1px solid rgba(255,255,255,0.08);
             border-radius: 24px;
             padding: 22px 24px;
             box-shadow: 0 8px 18px rgba(0,0,0,0.28);
             text-align: center;
-        }
-        .hero-title {
+        }}
+        .hero-title {{
             color: #f8fafc;
             font-size: clamp(1.4rem, 1.2rem + 1.6vw, 2.3rem);
             font-weight: 800;
             letter-spacing: .2px;
             margin: 2px 0 6px 0;
-        }
-        .hero-sub {
+        }}
+        .hero-sub {{
             color: #cbd5e1;
             font-size: clamp(.85rem, .8rem + .3vw, 1.0rem);
             margin: 0;
-        }
-        .kpi-card {
+        }}
+        .kpi-card {{
             background: linear-gradient(180deg, rgba(25,31,40,0.80) 0%, rgba(16,21,29,0.86) 100%);
             border: 1px solid rgba(255,255,255,0.08);
             border-radius: 24px;
@@ -421,33 +710,43 @@ def render_hero_panel():
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
             min-height: 160px;
-            display: flex; flex-direction: column; justify-content: space-between;
-        }
-        .kpi-title {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }}
+        .kpi-title {{
             font-size: .95rem;
             color: #cbd5e1;
-            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
             margin-bottom: 6px;
             letter-spacing: .2px;
-        }
-        .kpi-value {
+        }}
+        .kpi-value {{
             font-size: clamp(1.25rem, 1.0rem + 1.2vw, 2.0rem);
             font-weight: 800;
             color: #f8fafc;
             line-height: 1.08;
-            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        }
-        .kpi-sub {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }}
+        .kpi-sub {{
             font-size: .90rem;
             color: #94a3b8;
             margin-top: 6px;
-            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        }
-        .element-container img { border-radius: 16px; }
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }}
+        .element-container img {{
+            border-radius: 16px;
+        }}
         </style>
         <div class="hero-panel">
-            <h1 class="hero-title">NYC Citi Bike — Strategy Dashboard</h1>
-            <p class="hero-sub">Seasonality • Weather–demand correlation • Station intelligence • Time patterns</p>
+            <h1 class="hero-title">{title}</h1>
+            <p class="hero-sub">{subtitle}</p>
         </div>
         """,
         unsafe_allow_html=True,
