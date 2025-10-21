@@ -1027,6 +1027,19 @@ if _qp_page not in PAGES:
 
 page = st.sidebar.selectbox("📑 Analysis page", PAGES, index=PAGES.index(_qp_page), key="page_select")
 
+# ────────────────────────────── Sidebar footer / credentials ──────────────────────────────
+st.sidebar.markdown("---")
+st.sidebar.markdown("**👤 Moein Mellat, PhD**")
+st.sidebar.markdown(
+    """
+    Environmental Engineer • Data Analyst  
+    [🌐 GitHub](https://github.com/moeinmmm70)  
+    [💼 LinkedIn](https://www.linkedin.com/in/moeinmellat/)  
+    [📧 Email](mailto:moein.mellat@gmail.com)
+    """
+)
+st.sidebar.caption("© 2025 Moein Mellat • Citi Bike NYC Weather Analytics")
+
 # ---------- Primary filters ----------
 date_min = pd.to_datetime(df["date"].min()) if "date" in df.columns else None
 date_max = pd.to_datetime(df["date"].max()) if "date" in df.columns else None
