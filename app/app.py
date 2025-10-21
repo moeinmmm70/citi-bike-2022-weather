@@ -4262,18 +4262,18 @@ def page_recommendations(df_filtered: pd.DataFrame | None,
         spark = tiny_sparkline(d_sorted)
 
     def _metric(col, title, val, sub="", spark=None, icon=None):
-    with col:
-        icon_html = f'<span style="opacity:.75;margin-right:.35rem">{icon}</span>' if icon else ""
-        st.markdown(
-            f"""<div class="rec-card">
-                    <div class="rec-title">{icon_html}{title}</div>
-                    <div class="rec-val">{val}</div>
-                    <div class="rec-sub">{sub}</div>
-                </div>""",
-            unsafe_allow_html=True,
-        )
-        if spark is not None:
-            st.plotly_chart(spark, use_container_width=True, config={"displayModeBar": False})
+        with col:
+            icon_html = f'<span style="opacity:.75;margin-right:.35rem">{icon}</span>' if icon else ""
+            st.markdown(
+                f"""<div class="rec-card">
+                        <div class="rec-title">{icon_html}{title}</div>
+                        <div class="rec-val">{val}</div>
+                        <div class="rec-sub">{sub}</div>
+                    </div>""",
+                unsafe_allow_html=True,
+            )
+            if spark is not None:
+                st.plotly_chart(spark, use_container_width=True, config={"displayModeBar": False})
 
     _metric(cols[0], "Total trips", f"{kfmt(kpis.get('total_rides', 0))}",
             "Scope of evidence", spark=spark, icon="🚲")
