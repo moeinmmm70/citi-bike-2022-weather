@@ -1228,7 +1228,7 @@ show_last_n = st.sidebar.slider("Plot history window (days)", 60, 365, 180, 10)
 model_name = st.sidebar.selectbox(
     "Model",
     [
-        "Seasonal-Naive (t−7)", 
+        "Seasonal-Naive (t−7)",
         "Naive (t−1)",
         "7-day Moving Average",
         "SARIMAX (weekly)",
@@ -1238,16 +1238,17 @@ model_name = st.sidebar.selectbox(
 )
 
 if model_name == "SARIMAX (weekly)" and not HAS_SARIMAX:
-st.sidebar.warning("`statsmodels` not available — SARIMAX disabled")
+    st.sidebar.warning("`statsmodels` not available — SARIMAX disabled")
+
 if model_name == "De-weathered + Seasonal-Naive" and t is None:
-st.sidebar.warning("No temperature column found — de-weathered option will fallback to Seasonal-Naive.")
+    st.sidebar.warning("No temperature column found — de-weathered option will fallback to Seasonal-Naive.")
 
 # Future weather assumption for de-weathered model
 if model_name == "De-weathered + Seasonal-Naive":
     fut_temp_assume = st.sidebar.selectbox(
         "Future temperature assumption",
         ["Repeat last 7 days", "Hold last day"],
-          index=0
+        index=0
     )
 
 # ────────────────────────────── Sidebar footer / credentials ──────────────────────────────
