@@ -14,6 +14,7 @@ import plotly.io as pio
 from urllib.parse import quote, unquote
 import unicodedata
 import hashlib
+import textwrap
 try:
     from sklearn.linear_model import LinearRegression
 except Exception:
@@ -4255,56 +4256,41 @@ def page_recommendations(df_filtered: pd.DataFrame | None,
     st.markdown("### 📋 What to do next (4–8 weeks)")
 
     rec_items = [
-        {
-            "num": "1",
-            "title": "Morning readiness at hotspot stations",
-            "desc": ("Target <b>≥85% fill pre-AM</b> at top origins, <b>≥70% pre-PM</b> at top destinations. "
-                     "Use Weekday×Hour to time the <b>last pre-peak sweep</b>."),
-            "chips": ["Hot-20", "Peaks"]
-        },
-        {
-            "num": "2",
-            "title": "Weather-aware stocking",
-            "desc": ("On <b>mild days (15–25 °C)</b> lift dock targets in AM+PM. "
-                     f"On wet days, pre-position trucks near high-loss stations; expect demand <b>{rain_txt}</b> vs dry."),
-            "chips": ["Weather", "Ops"]
-        },
-        {
-            "num": "3",
-            "title": "Corridor-based rebalancing",
-            "desc": ("Stage trucks by <b>repeat high-flow endpoints</b> and run <b>loop routes</b> (origin→dest clusters). "
-                     "Prioritize stations with largest <b>|Δ (in−out)|</b>."),
-            "chips": ["Logistics", "Flows"]
-        },
-        {
-            "num": "4",
-            "title": "Rider nudges",
-            "desc": ("Offer <b>credits</b> for returns to <b>under-stocked docks</b> during commute windows. "
-                     "Trigger banners only when <b>dock-out risk</b> exceeds threshold within <b>60–90 min</b>."),
-            "chips": ["Product", "CX"]
-        },
-        {
-            "num": "5",
-            "title": "Focus scope (Pareto)",
-            "desc": (f"Maintain a <b>Hot-20</b> list covering ~<b>{p_start:.0f}% of starts / {p_end:.0f}% of ends</b>. "
-                     "Raise service quality here <b>first</b>."),
-            "chips": ["Pareto", "Quality"]
-        },
+        {"num": "1", "title": "Morning readiness at hotspot stations",
+         "desc": ("Target <b>≥85% fill pre-AM</b> at top origins, <b>≥70% pre-PM</b> at top destinations. "
+                  "Use Weekday×Hour to time the <b>last pre-peak sweep</b>."),
+         "chips": ["Hot-20", "Peaks"]},
+        {"num": "2", "title": "Weather-aware stocking",
+         "desc": ("On <b>mild days (15–25 °C)</b> lift dock targets in AM+PM. "
+                  f"On wet days, pre-position trucks near high-loss stations; expect demand <b>{rain_txt}</b> vs dry."),
+         "chips": ["Weather", "Ops"]},
+        {"num": "3", "title": "Corridor-based rebalancing",
+         "desc": ("Stage trucks by <b>repeat high-flow endpoints</b> and run <b>loop routes</b> (origin→dest clusters). "
+                  "Prioritize stations with largest <b>|Δ (in−out)|</b>."),
+         "chips": ["Logistics", "Flows"]},
+        {"num": "4", "title": "Rider nudges",
+         "desc": ("Offer <b>credits</b> for returns to <b>under-stocked docks</b> during commute windows. "
+                  "Trigger banners only when <b>dock-out risk</b> exceeds threshold within <b>60–90 min</b>."),
+         "chips": ["Product", "CX"]},
+        {"num": "5", "title": "Focus scope (Pareto)",
+         "desc": (f"Maintain a <b>Hot-20</b> list covering ~<b>{p_start:.0f}% of starts / {p_end:.0f}% of ends</b>. "
+                  "Raise service quality here <b>first</b>."),
+         "chips": ["Pareto", "Quality"]},
     ]
 
-    html_cards = []
-    for it in rec_items:
-        chips_html = "".join([f'<span class="chip">{c}</span>' for c in it["chips"]])
-        html_cards.append(
-            f"""
-            <div class="step-card">
-              <div class="step-num">Step {it['num']}</div>
-              <div class="step-title">{it['title']}{chips_html}</div>
-              <div class="step-desc">{it['desc']}</div>
-            </div>
-            """
-        )
-    grid_html = '<div class="grid-2">' + "".join(html_cards) + "</div>"
+    def render_card(num: str, title: str, desc: str, chips: list[str]) -> str:
+        chips_html = "".join(f'<span class="chip">{c}</span>' for c in chips)
+        # dedent + strip removes leading spaces/newlines that trigger Markdown code blocks
+        return textwrap.dedent(f"""
+        <div class="step-card">
+          <div class="step-num">Step {num}</div>
+          <div class="step-title">{title}{chips_html}</div>
+          <div class="step-desc">{desc}</div>
+        </div>
+        """).strip()
+
+    cards_html = "".join(render_card(**it) for it in rec_items)
+    grid_html = f'<div class="grid-2">{cards_html}</div>'
     st.markdown(grid_html, unsafe_allow_html=True)
 
     st.markdown("---")
