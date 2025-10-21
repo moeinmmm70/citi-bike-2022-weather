@@ -3488,9 +3488,9 @@ def page_weekday_hour_heatmap(df_filtered: pd.DataFrame) -> None:
 
     st.caption("Tips: try Row % to see within-day timing; Column % to see which days dominate each hour; Z-score to highlight anomalies.")
 
-# ───────────────────── Page: Recommendations ─────────────────────
+# ───────────────────── Page: Recommendations (evidence-driven, polished) ─────────────────────
 def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame | None) -> None:
-    """Opinionated, evidence-driven recommendations + KPIs, auto-derived from the current selection (polished UI)."""
+    """Evidence-driven recommendations + KPIs, auto-derived from the current selection (polished UI)."""
 
     # ── Guards
     if df_filtered is None or df_filtered.empty:
@@ -3498,7 +3498,7 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
         st.info("No data in the current selection. Adjust filters on the left.")
         return
 
-    # ── Small helpers (local to this page)
+    # ── Local helpers (kept inside to avoid name clashes)
     def _rain_penalty(daily: pd.DataFrame | None) -> float | None:
         if daily is None or daily.empty or "wet_day" not in daily.columns or "bike_rides_daily" not in daily.columns:
             return None
@@ -3517,56 +3517,37 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
         tmax: float = 35.0,
     ) -> float | None:
         """
-        Fit y ~ a2*(T - Tm)^2 + a1*(T - Tm) + a0 (centered for stability).
-        Return vertex temp in °C if it is a concave parabola and inside [tmin, tmax];
-        otherwise return None.
+        Fit Y ≈ a2*(T - Tm)^2 + a1*(T - Tm) + a0 (centered for stability).
+        Return vertex temp if concave (a2<0) and inside [tmin, tmax]; else None.
         """
         if daily is None or daily.empty or not {tcol, ycol}.issubset(daily.columns):
             return None
-
         d = daily[[tcol, ycol]].dropna().copy()
-        # Fit only within plausible riding temps to avoid crazy extrapolations
         d = d[(d[tcol] >= tmin) & (d[tcol] <= tmax)]
         if len(d) < 20:
             return None
-
-        T = d[tcol].to_numpy().astype(float)
-        Y = d[ycol].to_numpy().astype(float)
-
-        # Center T to reduce collinearity and improve numeric stability
+        T = d[tcol].to_numpy(dtype=float)
+        Y = d[ycol].to_numpy(dtype=float)
         Tm = T.mean()
         Tc = T - Tm
-
-        # Quadratic fit: Y ≈ a2*Tc^2 + a1*Tc + a0
         a2, a1, a0 = np.polyfit(Tc, Y, 2)
         if a2 >= 0:
-            # Parabola opens upward (minimum) → no meaningful "optimal" maximum
             return None
-
-        # Vertex in centered coordinate, then uncenter back
         Tc_opt = -a1 / (2 * a2)
         T_opt = float(Tc_opt + Tm)
-
-        # Clamp sanity: if outside plausible range, discard
         if T_opt < tmin or T_opt > tmax:
             return None
-
         return T_opt
 
     def _temp_elasticity_at_20c(daily: pd.DataFrame | None) -> float | None:
-        """
-        Quadratic fit y = a + bT + cT^2; elasticity ≈ (dy/dT)/y at T=20°C, in %/°C.
-        """
+        """Elasticity (%/°C) at 20 °C from quadratic y = a + bT + cT^2."""
         if daily is None or daily.empty or not {"avg_temp_c", "bike_rides_daily"}.issubset(daily.columns):
             return None
         d = daily.dropna(subset=["avg_temp_c", "bike_rides_daily"]).copy()
         if len(d) < 20:
             return None
-
-        T = d["avg_temp_c"].to_numpy().astype(float)
-        Y = d["bike_rides_daily"].to_numpy().astype(float)
-
-        # Design matrix for uncentered quadratic
+        T = d["avg_temp_c"].to_numpy(dtype=float)
+        Y = d["bike_rides_daily"].to_numpy(dtype=float)
         X = np.c_[np.ones(len(T)), T, T**2]
         try:
             a, b, c = np.linalg.lstsq(X, Y, rcond=None)[0]
@@ -3582,14 +3563,14 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
     def _top_share(df: pd.DataFrame, col: str, top_k: int = 20) -> float | None:
         if col not in df.columns or df.empty:
             return None
-        counts = df[col].astype(str).value_counts()
-        total = int(counts.sum())
-        if total == 0:
+        vc = df[col].astype(str).value_counts()
+        tot = int(vc.sum())
+        if tot == 0:
             return None
-        return float(100.0 * counts.head(top_k).sum() / total)
+        return float(100.0 * vc.head(top_k).sum() / tot)
 
     def _peak_cell(df: pd.DataFrame) -> tuple[str, str] | None:
-        """Return ('Weekday','Hour') for the absolute peak in weekday×hour grid."""
+        """Return ('Weekday','Hour') for absolute peak in weekday×hour grid."""
         mat = _make_heat_grid(df, hour_col="hour", weekday_col="weekday", hour_bin=1, scale="Absolute")
         if mat.empty or not np.isfinite(mat.to_numpy()).any():
             return None
@@ -3613,23 +3594,28 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
         return pd.concat([hi, lo])
 
     # ── Core evidence
-    kpis = compute_core_kpis(df_filtered, daily_filtered)  # {total_rides, avg_day, corr_tr}
+    kpis = compute_core_kpis(df_filtered, daily_filtered)  # expects {total_rides, avg_day, corr_tr}
     rain_pen = _rain_penalty(daily_filtered)
-    temp_el = _temp_elasticity_at_20c(daily_filtered)
+    temp_el  = _temp_elasticity_at_20c(daily_filtered)
     share_top20_start = _top_share(df_filtered, "start_station_name", 20)
-    share_top20_end = _top_share(df_filtered, "end_station_name", 20)
+    share_top20_end   = _top_share(df_filtered, "end_station_name", 20)
     peak = _peak_cell(df_filtered)
-    imb = _imbalance_table(df_filtered, topk=10)  # grab 10 so pilot has enough
+    imb  = _imbalance_table(df_filtered, topk=10)  # 10 for pilot plan
 
     # safe formatting
     p_start = 0.0 if share_top20_start is None or (isinstance(share_top20_start, float) and np.isnan(share_top20_start)) else float(share_top20_start)
     p_end   = 0.0 if share_top20_end   is None or (isinstance(share_top20_end,   float) and np.isnan(share_top20_end))   else float(share_top20_end)
     rain_txt = f"{rain_pen:+.0f}%" if rain_pen is not None else "lower"
 
-    if np.isnan(T_opt):
-        st.info("Optimal temperature not reliable for this selection.")
-    else:
-        st.success(f"Estimated optimal temperature for demand: {T_opt:.1f} °C (quadratic fit)")
+    # ── Optional: compute optimal temperature here (kept lean & safe)
+    T_opt = None
+    if daily_filtered is not None and not daily_filtered.empty and "avg_temp_c" in daily_filtered.columns:
+        try:
+            tmin = max(-5.0, float(daily_filtered["avg_temp_c"].min()))
+            tmax = min(35.0, float(daily_filtered["avg_temp_c"].max()))
+            T_opt = _optimal_temp_quadratic(daily_filtered, "avg_temp_c", "bike_rides_daily", tmin, tmax)
+        except Exception:
+            T_opt = None
 
     # ── Styles
     st.markdown(
@@ -3668,6 +3654,8 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
         badges.append(f'<span class="badge">Rain impact: {rain_txt}</span>')
     if p_start or p_end:
         badges.append(f'<span class="badge">Top-20 coverage: {p_start:.0f}% / {p_end:.0f}%</span>')
+    if T_opt is not None:
+        badges.append(f'<span class="badge">Comfort: {T_opt:.1f} °C</span>')
     if badges:
         st.markdown(" ".join(badges), unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
@@ -3693,7 +3681,7 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
     _metric(cols[3], "Rain penalty", rain_txt if rain_pen is not None else "—", "Wet vs dry days")
     _metric(cols[4], "Top-20 share", f"{p_start:.0f}% / {p_end:.0f}%", "Start / End station coverage")
 
-    # ── Insight bullets that adapt to data
+    # ── Insights that adapt to data
     bullets = []
     if kpis.get("corr_tr") is not None and abs(kpis["corr_tr"]) >= 0.30:
         bullets.append("• Temperature is a **material driver** of demand in this selection.")
@@ -3703,6 +3691,8 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
         bullets.append("• Demand is **concentrated**: Hot-20 covers most rides — optimize here first.")
     if peak:
         bullets.append(f"• Peak window: **{peak[0]} {peak[1]}**. Time the last replenishment **before** this window.")
+    if T_opt is not None:
+        bullets.append(f"• Comfort temperature ≈ **{T_opt:.1f} °C**; up-weight AM/PM fills on mild days.")
     if bullets:
         st.markdown('<div class="callout">', unsafe_allow_html=True)
         st.markdown("**Insights at a glance**  \n" + "\n".join(bullets))
@@ -3758,13 +3748,11 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
         else:
             st.info("Need start/end station names to compute imbalance.")
 
-    # Pilot Plan (auto-generated)
+    # Pilot Plan
     with tab2:
         if not imb.empty:
-            # pick top 10 by absolute imbalance for the pilot
             pilot = imb.reindex(imb["Δ (in−out)"].abs().sort_values(ascending=False).head(10).index).reset_index()
             pilot = pilot.rename(columns={"index": "Station"})
-            # naive AM/PM targets (keep simple + transparent)
             pilot["AM target fill"] = 85
             pilot["PM target fill"] = 70
             pilot["Rationale"] = np.where(
@@ -3797,33 +3785,18 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
 
             fig = make_subplots(specs=[[{"secondary_y": True}]])
             fig.add_trace(
-                go.Scatter(
-                    x=d["date"],
-                    y=d.get("bike_rides_daily_roll", d["bike_rides_daily"]),
-                    name="Daily rides",
-                    mode="lines",
-                    line=dict(width=2),
-                ),
+                go.Scatter(x=d["date"], y=d.get("bike_rides_daily_roll", d["bike_rides_daily"]),
+                           name="Daily rides", mode="lines", line=dict(width=2)),
                 secondary_y=False,
             )
             if "avg_temp_c" in d.columns:
                 fig.add_trace(
-                    go.Scatter(
-                        x=d["date"],
-                        y=d.get("avg_temp_c_roll", d["avg_temp_c"]),
-                        name="Avg temp (°C)",
-                        mode="lines",
-                        line=dict(width=2, dash="dot"),
-                        opacity=0.9,
-                    ),
+                    go.Scatter(x=d["date"], y=d.get("avg_temp_c_roll", d["avg_temp_c"]),
+                               name="Avg temp (°C)", mode="lines", line=dict(width=2, dash="dot"), opacity=0.9),
                     secondary_y=True,
                 )
-            fig.update_layout(
-                height=340,
-                margin=dict(l=10, r=10, t=30, b=10),
-                hovermode="x unified",
-                title="Trend overview (14-day smoother)",
-            )
+            fig.update_layout(height=340, margin=dict(l=10, r=10, t=30, b=10),
+                              hovermode="x unified", title="Trend overview (14-day smoother)")
             fig.update_yaxes(title_text="Rides", secondary_y=False)
             fig.update_yaxes(title_text="Temp (°C)", secondary_y=True)
             st.plotly_chart(fig, use_container_width=True)
@@ -3832,7 +3805,6 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
 
     # Downloads
     with tab4:
-        # Imbalance CSV
         if not imb.empty:
             st.download_button(
                 "Download imbalance stations (CSV)",
@@ -3840,22 +3812,22 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
                 "imbalance_focus.csv",
                 "text/csv",
             )
-        # Summary CSV
         summary = {
             "total_trips": [kpis.get("total_rides", 0)],
             "avg_per_day": [kpis.get("avg_day") if kpis.get("avg_day") is not None else np.nan],
             "corr_temp_rides": [kpis.get("corr_tr") if kpis.get("corr_tr") is not None else np.nan],
             "rain_penalty_pct": [rain_pen if rain_pen is not None else np.nan],
             "temp_elasticity_20c_pct_per_c": [temp_el if temp_el is not None else np.nan],
-            "top20_share_start_pct": [p_start if p_start is not None else np.nan],
-            "top20_share_end_pct": [p_end if p_end is not None else np.nan],
+            "top20_share_start_pct": [p_start],
+            "top20_share_end_pct": [p_end],
             "peak_weekday": [peak[0] if peak else ""],
             "peak_hour": [peak[1] if peak else ""],
+            "comfort_temp_c": [T_opt if T_opt is not None else np.nan],
         }
         csv = pd.DataFrame(summary).to_csv(index=False).encode("utf-8")
         st.download_button("Download summary (CSV)", csv, "recommendations_summary.csv", "text/csv")
 
-    # ── Risk flags & assumptions (brief, stakeholder-friendly)
+    # ── Risk flags & assumptions
     risk_msgs = []
     if daily_filtered is None or daily_filtered.empty or "avg_temp_c" not in (daily_filtered.columns if daily_filtered is not None else []):
         risk_msgs.append("No daily temperature series in this selection (trend elasticity unavailable).")
@@ -3866,11 +3838,10 @@ def page_recommendations(df_filtered: pd.DataFrame, daily_filtered: pd.DataFrame
         st.markdown("**Risk flags & assumptions**  \n" + "\n".join([f"- {m}" for m in risk_msgs]))
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # Supporting media (keep optional & tucked away)
+    # Supporting media (optional)
     with st.expander("CitiBike experience"):
         st.video("https://www.youtube.com/watch?v=vm37IuX7UPQ")
 
-    # Closing
     st.caption("Built from the current selection — share this view via the URL to reproduce the plan.")
 
 # ────────────────────────────── Page routing (place this after defining all page_* functions) ─────────────────────────────────────
