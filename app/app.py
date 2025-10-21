@@ -4049,10 +4049,10 @@ def page_recommendations(df_filtered: pd.DataFrame | None,
 
     def _peak_cell(df: pd.DataFrame | None) -> tuple[str, str] | None:
         """Return ('Weekday','Hour') for absolute peak in weekday×hour grid."""
-        if df is None or df.empty:
+        if df is None or df.empty or _make_heat_grid_fn is None:
             return None
-        mat = _make_heat_grid(df, hour_col="hour", weekday_col="weekday", hour_bin=1, scale="Absolute")
-        if mat.empty or not np.isfinite(mat.to_numpy()).any():
+        mat = _make_heat_grid_fn(df, hour_col="hour", weekday_col="weekday", hour_bin=1, scale="Absolute")
+        if mat is None or mat.empty or not np.isfinite(mat.to_numpy()).any():
             return None
         r, c = np.unravel_index(np.nanargmax(mat.values), mat.shape)
         weekday = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][r]
@@ -4075,9 +4075,48 @@ def page_recommendations(df_filtered: pd.DataFrame | None,
         lo = m.sort_values("Δ (in−out)", ascending=True).head(topk)
         return pd.concat([hi, lo])
 
+    # number formatter
+    kfmt = globals().get("kfmt", lambda v: "—" if v is None or (isinstance(v, float) and np.isnan(v))
+                         else f"{int(v):,}")
+
+    # rain penalty: % difference in rides on wet vs dry days
+    def _rain_penalty_local(daily: pd.DataFrame | None) -> float | None:
+        if daily is None or daily.empty or "bike_rides_daily" not in daily.columns:
+            return None
+        df = daily.copy()
+        wet = None
+        # try common wet indicators
+        if "wet" in df.columns:
+            wet = df["wet"].astype(int) > 0
+        elif "is_wet" in df.columns:
+            wet = df["is_wet"].astype(int) > 0
+        elif "precip_mm" in df.columns:
+            wet = df["precip_mm"].fillna(0).astype(float) > 0.2
+        elif "prcp" in df.columns:   # NOAA-style precipitation
+            wet = df["prcp"].fillna(0).astype(float) > 0.2
+        else:
+            return None
+
+        y = pd.to_numeric(df["bike_rides_daily"], errors="coerce")
+        y_wet  = y[wet].dropna()
+        y_dry  = y[~wet].dropna()
+        if len(y_wet) < 5 or len(y_dry) < 5:
+            return None
+        dry_mean = float(y_dry.mean())
+        wet_mean = float(y_wet.mean())
+        if dry_mean <= 0:
+            return None
+        return float((wet_mean - dry_mean) / dry_mean * 100.0)
+
+    # safe accessor for global helper if it exists
+    _rain_penalty_fn = globals().get("_rain_penalty", _rain_penalty_local)
+
+    # make _make_heat_grid optional for this page
+    _make_heat_grid_fn = globals().get("_make_heat_grid", None)
+    
     # ── Core evidence
     kpis = compute_core_kpis(df_filtered, daily_filtered)  # expects at least {total_rides, avg_day, corr_tr}
-    rain_pen = _rain_penalty(daily_filtered)
+    rain_pen = _rain_penalty_fn(daily_filtered)
     temp_el  = _temp_elasticity_at_20c(daily_filtered)
     share_top20_start = _top_share(df_filtered, "start_station_name", 20)
     share_top20_end   = _top_share(df_filtered, "end_station_name", 20)
