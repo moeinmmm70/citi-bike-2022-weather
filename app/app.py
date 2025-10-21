@@ -629,118 +629,113 @@ st.sidebar.title("🚲 Citi Bike 2022 Analysis")
 # --- Quick Actions ---
 st.sidebar.subheader("⚡ Quick Actions")
 if st.sidebar.button("✨ Commuter preset"):
-st.query_params.update({
-"page": "📑 Daily & Hourly Trends",
-"hour_range": [6, 10],
-"hour_range2": [16, 20],
-"member_type": "member",
-"temp_range": [10, 30],
-})
-st.rerun()
+    st.query_params.update({
+        "page": "📑 Daily & Hourly Trends",
+        "hour_range": [6, 10],
+        "hour_range2": [16, 20],
+        "member_type": "member",
+        "temp_range": [10, 30],
+    })
+    st.rerun()
 
 # Unified reset button
 if st.sidebar.button("♻️ Reset filters and reload"):
-st.cache_data.clear()
-st.query_params.clear()
-st.rerun()
+    st.cache_data.clear()
+    st.query_params.clear()
+    st.rerun()
 
 # --- Filters ---
 st.sidebar.subheader("🎛️ Filters")
-# Date range
+
 daterange = st.sidebar.date_input(
-"Date range",
-value=(dt.date(2022, 1, 1), dt.date(2022, 12, 31)),
-min_value=dt.date(2022, 1, 1),
-max_value=dt.date(2022, 12, 31),
-help="Select the start and end date for analysis."
+    "Date range",
+    value=(dt.date(2022, 1, 1), dt.date(2022, 12, 31)),
+    min_value=dt.date(2022, 1, 1),
+    max_value=dt.date(2022, 12, 31),
+    help="Select the start and end date for analysis."
 )
 
-# Season filter
 season = st.sidebar.multiselect(
-"Season",
-["Winter", "Spring", "Summer", "Autumn"],
-default=["Winter", "Spring", "Summer", "Autumn"],
-help="Filter by meteorological seasons."
+    "Season",
+    ["Winter", "Spring", "Summer", "Autumn"],
+    default=["Winter", "Spring", "Summer", "Autumn"],
+    help="Filter by meteorological seasons."
 )
 
-# Member type
 member_type = st.sidebar.radio(
-"Member type",
-["all", "member", "casual"],
-index=0,
-help="Choose rider type to analyze."
+    "Member type",
+    ["all", "member", "casual"],
+    index=0,
+    help="Choose rider type to analyze."
 )
 
-# Advanced filters
+# --- Advanced Filters ---
 with st.sidebar.expander("⚙️ More filters"):
-temp_range = st.slider(
-"Temperature (°C)",
--10, 40, (-10, 40),
-help="Filter by average trip temperature."
-)
+    temp_range = st.slider(
+        "Temperature (°C)",
+        -10, 40, (-10, 40),
+        help="Filter by average trip temperature."
+    )
 
-hour_range = st.slider(
-"Hour of day",
-0, 23, (0, 23),
-help="Filter trips by starting hour."
-)
+    hour_range = st.slider(
+        "Hour of day",
+        0, 23, (0, 23),
+        help="Filter trips by starting hour."
+    )
 
-weekdays = st.multiselect(
-"Days of week",
-["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
-default=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
-help="Select days to include in analysis."
-)
+    weekdays = st.multiselect(
+        "Days of week",
+        ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+        default=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+        help="Select days to include in analysis."
+    )
 
-robust = st.toggle(
-"Exclude extreme outliers",
-value=True,
-help="Remove top 0.5% of trip durations and speeds."
-)
+    robust = st.toggle(
+        "Exclude extreme outliers",
+        value=True,
+        help="Remove top 0.5% of trip durations and speeds."
+    )
 
 # --- Share Link ---
 st.sidebar.markdown("---")
 st.sidebar.caption("🔗 Share this view by copying the URL.")
-
 st.sidebar.markdown("---")
 
 PAGES = [
     "Intro",
     "Weather vs Bike Usage",
-    "Trip Metrics (Duration • Distance • Speed)",
+    "📑 Daily & Hourly Trends",
     "Member vs Casual Profiles",
+    "Trip Metrics (Duration • Distance • Speed)",
+    "Station Popularity",
+    "Pareto: Share of Rides",
     "OD Flows — Sankey + Map",
     "OD Matrix — Top Origins × Dest",
-    "Station Popularity",
     "Station Imbalance (In vs Out)",
-    "Pareto: Share of Rides",
-    "Weekday × Hour Heatmap",
     "Recommendations",
 ]
 
-# Seed default page from URL (if present), otherwise first page
+# Resolve page from URL param if present
 _qp = _qp_get()
-_qp_page = None
-if "page" in _qp:
-    _qp_page = _qp["page"][0] if isinstance(_qp["page"], list) else _qp["page"]
+_qp_page = _qp.get("page", [PAGES[0]])[0]
 if _qp_page not in PAGES:
     _qp_page = PAGES[0]
 
-# The widget value drives the app; we do NOT override it afterwards
+# Select page
 page = st.sidebar.selectbox(
     "📑 Analysis page",
     PAGES,
     index=PAGES.index(_qp_page),
-    key="page_select",
+    key="page_select"
 )
 
-# After filters chosen → write them to URL (safe)
+# Write filter state to query params
 try:
     _qp_set(
         page=page,
-        date0=str(date_range[0]) if date_range else None,
-        date1=str(date_range[1]) if date_range else None,
-        usertype=usertype or "All",
+        date0=str(daterange[0]) if daterange else None,
+        date1=str(daterange[1]) if daterange else None,
+        usertype=member_type or "all",
         hour0=hour_range[0] if hour_range else None,
         hour1=hour_range[1] if hour_range else None
     )
@@ -750,9 +745,9 @@ except Exception:
 # Filtered data
 df_f = apply_filters(
     df,
-    (pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])) if date_range else None,
-    seasons,
-    usertype,
+    (pd.to_datetime(daterange[0]), pd.to_datetime(daterange[1])) if daterange else None,
+    season,
+    member_type,
     temp_range,
     hour_range=hour_range,
     weekdays=weekdays,
@@ -778,7 +773,6 @@ def _backfill_trip_weather(df_trips: pd.DataFrame, daily_df: pd.DataFrame) -> pd
 
     # ensure both are datetime (day-level) for mapping
     out["date"] = pd.to_datetime(out["date"], errors="coerce")
-    # daily_df['date'] is already datetime from ensure_daily()
 
     for col, mapper in lookups.items():
         if col not in out.columns or out[col].notna().sum() == 0:
