@@ -1,11 +1,12 @@
 # 🚲 NYC Citi Bike — 2022 Weather & Usage Analytics
 _Analyzing how weather, time and station dynamics drive ride-share behaviour in NYC_
 
-[![Streamlit App](https://img.shields.io/badge/Live%20App-Streamlit-brightgreen?logo=streamlit)](https://citi-bike-2022-weather-yewjc77stq3kroa9s8ffrm.streamlit.app/)
+[![Streamlit App](https://img.shields.io/badge/Live%20App-Streamlit-brightgreen?logo=streamlit)](https://citi-bike-2022-weather-jtseqkottmbuxcuwhytxhl.streamlit.app/)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg?logo=python)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.x-FF4B4B.svg?logo=streamlit&logoColor=white)
 ![Plotly](https://img.shields.io/badge/Plotly-graphing-3D77B6.svg)
 ![Status](https://img.shields.io/badge/Status-Active-success.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
 **Interactive, decision-oriented dashboard** that explores how **weather** shapes **Citi Bike demand** across New York City in **2022**.  
 It highlights seasonality, station concentration (Pareto), OD flows, diurnal patterns, and includes a **What-If** tool to estimate rides at a given temperature.
@@ -13,8 +14,16 @@ It highlights seasonality, station concentration (Pareto), OD flows, diurnal pat
 > 🔴 **Live app:** [citi-bike-2022-weather.streamlit.app](https://citi-bike-2022-weather-jtseqkottmbuxcuwhytxhl.streamlit.app)
 💻 Python · 📊 Streamlit · 🗺️ Geospatial · 🔍 Data-Storytelling
 
+---
+
 ## 🧭 Purpose  
-Explore 2022 ride-share data from :contentReference[oaicite:0]{index=0} in New York City through the lens of weather, time, station dynamics and user behaviour — then turn the insights into actionable recommendations.
+
+**Situation → Task → Action → Result**
+
+- **Situation:** NYC’s bike-sharing network logs millions of rides yearly, but demand fluctuates wildly with temperature, rain, and commuting patterns.  
+- **Task:** Build a transparent analytical tool to quantify those effects and help decision-makers anticipate usage and rebalance bikes efficiently.  
+- **Action:** Combine Citi Bike 2022 data with NOAA weather records, engineer daily metrics, visualize correlations, and deploy a modular multi-page Streamlit dashboard.  
+- **Result:** A fast, visually clean web app that turns raw trip data into operational insight — demonstrating end-to-end analytics, data-storytelling, and app deployment.
 
 ---
 
@@ -24,10 +33,13 @@ Explore 2022 ride-share data from :contentReference[oaicite:0]{index=0} in New Y
 - [⚙️ How it Works](#️-how-it-works)  
 - [🌦️ Data](#️-data)  
 - [📊 Features by Page](#-features-by-page)  
+- [📆 Time Series — Forecast & Decomposition](#-time-series--forecast--decomposition)  
 - [📈 KPIs](#-kpis)  
 - [🧰 Tech Stack](#-tech-stack)  
 - [💻 Local Setup](#-local-setup)  
 - [📁 Repository Structure](#-repository-structure)  
+- [⚡ Performance Notes](#-performance-notes)  
+- [🧭 Sidebar UX](#-sidebar-ux)  
 - [🗺️ Roadmap](#️-roadmap)  
 - [📜 License & Attribution](#-license--attribution)  
 - [👥 Contributors & Contact](#-contributors--contact)
@@ -35,14 +47,17 @@ Explore 2022 ride-share data from :contentReference[oaicite:0]{index=0} in New Y
 ---
 
 ## ✨ Highlights  
-- 🌡️ **Weather ↔ Usage correlation** with dual-axis line + scatter views  
-- 🧊 **Comfort window** for 15–25 °C riding conditions  
-- 🚉 **Station intelligence:** Pareto share, Hot-20 coverage, and imbalance  
-- 🧭 **OD Flows & Matrix:** map + Sankey + corridors  
-- 📆 **Temporal patterns:** weekday × hour heatmap  
-- ⚙️ **Evidence-based Recommendations Engine** with KPIs & pilot plan  
-- 🎨 Clean UX: gradient cards, URL-synced filters, polished typography  
-- 👤 **Author credits** displayed at sidebar bottom
+
+- 🌡️ **Weather ↔ Usage correlation:** Dual-axis line + scatter views showing how temperature and rain affect ridership.  
+- 🧊 **Comfort window:** Optimal riding zone between 15 – 25 °C.  
+- 📉 **De-weathered Index:** Residual demand signal after removing temperature influence (shows underlying mobility).  
+- 🔮 **Time Series:** STL decomposition + forecasts using Naive, Seasonal-Naive, 7-day MA, optional SARIMAX, and De-weathered + Seasonal-Naive models with backtesting.  
+- 🚉 **Station intelligence:** Pareto share, Hot-20 coverage, and imbalance metrics for rebalancing.  
+- 🧭 **OD Flows & Matrix:** Sankey + pydeck Arc map with diagnostics and CSV downloads.  
+- 📆 **Temporal patterns:** Weekday×Hour heatmap with Row %, Col %, Z-score, and Wet vs Dry comparison.  
+- ⚙️ **Recommendations Engine:** Data-driven actions, measurable KPIs, pilot plan, downloadable CSV summaries, risk flags, and YouTube embed.  
+- 🎛️ **UX niceties:** Quick presets, URL-synced filters, “copy link” action, and accent theme toggle.  
+- 💡 **Result:** End-to-end data product — clean code, reproducible analysis, and executive-grade visuals.
 
 ---
 
@@ -52,32 +67,39 @@ Explore 2022 ride-share data from :contentReference[oaicite:0]{index=0} in New Y
 |------|----------|
 | **Intro & KPIs** | ![Intro](reports/screenshots/intro_kpis.png) |
 | **Weather vs Usage** | ![Weather](reports/screenshots/weather_vs_usage.png) |
+| **De-weathered Index** | ![Deweather](reports/screenshots/deweathered_index.png) |
 | **Pareto & Top Stations** | ![Stations](reports/screenshots/station_popularity.png) |
-| **OD Flows (Sankey)** | ![Flows](reports/screenshots/flows_sankey.png) |
-| **Heatmap (Weekday×Hour)** | ![Heatmap](reports/screenshots/weekday_hour_heatmap.png) |
+| **OD Flows (Sankey + Map)** | ![Flows](reports/screenshots/flows_sankey.png) |
+| **Weekday×Hour Heatmap** | ![Heatmap](reports/screenshots/weekday_hour_heatmap.png) |
+| **Forecast & Decomposition** | ![Forecast](reports/screenshots/time_series_forecast.png) |
 | **Recommendations** | ![Recommendations](reports/screenshots/recommendations.png) |
 
 ---
 
-## ⚙️ How it Works
+## ⚙️ How it Works  
 
-- Loads processed trip + weather dataset: `data/processed/reduced_citibike_2022.csv`  
-- Normalizes dates → builds **daily table** automatically  
-- Calculates temperature elasticity, rain penalty, and top-station shares  
-- Uses cached aggregations for speed and reproducibility  
-- All visuals auto-refresh with sidebar filters and query-string state
+- Loads processed dataset `data/processed/reduced_citibike_2022.csv`.  
+- Normalizes and aggregates trip + weather data to daily level.  
+- Computes temperature elasticity, rain penalty, station-level KPIs, and Pareto shares.  
+- Generates a **De-weather model** (y = b₀ + b₁·temp; residuals used for “true demand”).  
+- Integrates forecasting (STL, Naive, SARIMAX) and backtesting tools.  
+- Caches aggregations for speed and uses **URL-synced filters** so links reproduce views.  
+- Provides **Quick presets**, **accent theme**, and **copy-link action** for better UX.  
+
+**Result:** A reproducible, lightweight, and fully interactive app that runs smoothly on Streamlit Cloud (< 25 MB dataset).
 
 ---
 
 ## 🌦️ Data  
+
 | Source | Description |
 |--------|-------------|
-| 🚲 **Citi Bike NYC (2022)** | Ride-level trip data |
-| 🌤️ **Weather feed (NOAA)** | Avg temp °C, precipitation mm, wind kph, humidity |
-| 🗺️ **Optional maps** | Kepler.gl HTML exports in `reports/map/` |
+| 🚲 **Citi Bike NYC (2022)** | Ride-level trip data (12 monthly CSVs) |
+| 🌤️ **NOAA Weather Feed** | Avg Temp °C, Precip mm, Wind kph, Humidity |
+| 🗺️ **Kepler.gl Maps** | Optional HTML exports (`reports/map/`) |
 
 Expected columns:  
-`ride_id`, `started_at`, `start_station_name`, `end_station_name`, `date`, `bike_rides_daily`, `avg_temp_c`, `wet_day`
+`ride_id`, `started_at`, `start_station_name`, `end_station_name`, `date`, `bike_rides_daily`, `avg_temp_c`, `wet_day`  
 
 > 💡 App auto-detects column name variants (`avgTemp`, `temperature_c`, etc.).
 
@@ -86,53 +108,48 @@ Expected columns:
 ## 📊 Features by Page  
 
 ### 🏠 Intro  
-- Cover image + KPI cards: Total Trips | Avg/Day | Temp Impact | Weather Impact | Peak Season  
-- Auto-syncs state with URL parameters  
+- Hero panel + KPI cards: Total Trips, Avg/Day, Temp ↔ Rides, Weather Impact, Peak Season.  
+- Auto-syncs state with URL parameters.
 
 ### 🌤️ Weather vs Bike Usage  
-- Dual-axis rides vs temperature (14-day smoother)  
-- Scatter plot + OLS trendline colored by precip bin  
-- Highlights comfort window (15–25 °C)  
+- Tabs: **Trend**, **Scatter**, **Distributions**, **Lab**, and **📉 De-weathered Index**.  
+- OLS trendline + comfort band (15–25 °C).  
 
 ### 📈 Trip Metrics (Duration • Distance • Speed)  
-- Distributions & summary stats for ride lengths & speeds  
-- Filterable by user type and time window  
+- Distribution and summary stats for ride lengths and speeds; filterable by user type and time.
 
 ### 👥 Member vs Casual Profiles  
-- Behavioural comparison: ride duration, start hours, distance  
-- Differentiates commuters vs leisure riders  
+- Behavioural comparison of ride duration, start hours, and distance; shows commuter vs leisure patterns.
 
 ### 📊 Pareto — Share of Rides  
-- Cumulative distribution showing Hot-20 coverage  
-- Reveals concentration of usage by station  
+- Cumulative distribution showing Hot-20 coverage and station concentration.
 
 ### 🚉 Station Popularity  
-- Top N stations (by starts and ends) + CSV export  
-- Clean labels & interactive bars  
+- Top-N stations (by starts/ends) with interactive bars and CSV export.
 
 ### 🔀 OD Flows — Sankey + Map  
-- Visualizes top Origin→Destination pairs  
-- Optional Kepler map overlay  
+- Visualizes top Origin→Destination pairs as Sankey and **pydeck Arc map**.  
+- Controls for time-slice, top-k, and member split; **download OD edges (CSV)**.
 
-### 🔢 OD Matrix — Top Origins × Dest  
-- Compact matrix of high-traffic station pairs  
-- Basis for corridor-based rebalancing  
+### 🔢 OD Matrix — Top Origins × Destinations  
+- Top-O×Top-D matrix; normalization (None / Row / Col); log scaling and diagnostic stats + download.
 
 ### ⚖️ Station Imbalance (In vs Out)  
-- Computes Δ (in−out) for each station  
-- Identifies stocking & return pressure points  
+- Computes Δ(in−out) per station → identifies stocking and return pressure points.
 
 ### ⏰ Weekday × Hour Heatmap  
-- 7×24 matrix showing temporal load  
-- Pinpoints commute windows for truck staging  
+- 7×24 matrix showing temporal load patterns; modes: Row %, Col %, Z-score, Wet vs Dry.
+
+### 📆 Time Series — Forecast & Decomposition  
+- **STL Decomposition** (seasonal = 7 days).  
+- Forecast methods: Naive, Seasonal-Naive, 7-day MA, optional **SARIMAX**, and **De-weathered + Seasonal-Naive**.  
+- **Backtest mode** for rolling error metrics; visualizes forecast bands.
 
 ### 🚀 Recommendations  
-- **Executive Summary Cards:** total trips, avg/day, temp ↔ rides (r), rain penalty, Hot-20 coverage  
-- **Insights at a Glance:** auto-bullets from your selection (e.g., “wet days depress rides”)  
-- **Action Plan (4–8 weeks):** readiness targets, weather-aware stocking, corridor loops, rider nudges, Pareto focus  
-- **KPIs to Track:** Dock-out @ peaks < 5% | Complaints −30% MoM | Truck km per rebalance −15% | On-time readiness ≥ 90%  
-- **Hot-20 Pilot Plan:** top |Δ (in−out)| stations + AM/PM targets (85 / 70%) + CSV export  
-- **Evidence Tabs:** imbalance table, rides-vs-temp trend, summary CSV  
+- Executive KPIs cards + auto-generated insights.  
+- **4–8 week Action Plan:** stocking targets, corridor loops, incentives.  
+- **KPIs:** Dock-out < 5 %, Complaints −30 % MoM, Truck km −15 %.  
+- **Downloads:** Summary CSV + pilot table; risk flags & assumptions; embedded YouTube clip.  
 
 > 💡 Author credentials (GitHub · LinkedIn · Email) appear at the bottom of the sidebar.
 
@@ -142,15 +159,16 @@ Expected columns:
 
 | Metric | Target | Description |
 |---------|--------|-------------|
-| 🧮 Total Trips |  — | Scope of selection |
-| 📅 Avg/Day |  — | Daily volume |
-| 🌡️ Temp ↔ Rides (r) |  — | Weather elasticity |
-| 🌧️ Rain Penalty |  — | Wet vs dry day impact (%) |
-| 🏆 Hot-20 Coverage |  60–70% | Share of starts / ends |
+| 🧮 Total Trips | — | Scope of selection |
+| 📅 Avg/Day | — | Daily volume |
+| 🌡️ Temp ↔ Rides (r) | — | Weather elasticity |
+| 🌧️ Rain Penalty | — | Wet vs Dry impact (%) |
+| 🏆 Hot-20 Coverage | 60 – 70 % | Share of starts/ends |
 
 ---
 
 ## 🧰 Tech Stack  
+
 - 🖥️ Streamlit 1.x (UI + interactivity)  
 - 📊 Plotly (express + graph_objects)  
 - 🧮 Pandas / NumPy (data processing)  
@@ -176,11 +194,11 @@ pip install -r requirements.txt
 # or minimal
 pip install streamlit pandas numpy plotly
 
-# 4️⃣ Add your processed dataset
+# 4️⃣ Add processed dataset
 # (≤25 MB daily or trip-level sample)
 data/processed/reduced_citibike_2022.csv
 
-# 5️⃣ Optional: Add maps
+# 5️⃣ Add maps
 reports/map/citibike_trip_flows_2022.html
 
 # 6️⃣ Run the app
@@ -207,30 +225,32 @@ streamlit run app/st_dashboard_Part_2.py
 
 > 💡 **Note:** Large raw datasets are intentionally **excluded** from version control. Only the processed sample is tracked for reproducibility.
 
-## ⚡ Performance Notes
+---
 
-- Optimized for **≤25 MB** data — runs smoothly on Streamlit Cloud  
-- Uses `@st.cache_data` for efficient reloading  
-- Converts station names to `category` dtype for memory efficiency  
-- Daily aggregations cached and reused across visualizations  
+## ⚡ Performance Notes  
+
+- Optimized for **≤ 25 MB** dataset → runs smoothly on Streamlit Cloud.  
+- Uses `@st.cache_data` for efficient reloading and state management.  
+- Converts station names to `category` dtype for memory optimization.  
+- Reuses daily aggregations across visualizations to avoid recomputation.  
 
 ---
 
-## 🗺️ Roadmap
+## 🗺️ Roadmap  
 
-- 🌧️ Add multivariate weather model (temp + precip)  
-- 🔮 ARIMA/Prophet forecast module 
-- 🛰️ Station-level anomaly detection  
-- 📤 Export to PDF/PNG reports  
-- 📆 Year selector for 2023–2024 datasets  
+- 🌧️ Add multivariate model combining temperature + precipitation  
+- 🔮 Extend forecasting with ARIMA / Prophet modules  
+- 🛰️ Integrate station-level anomaly detection  
+- 📤 Enable PDF / PNG report export  
+- 📆 Include 2023–2024 datasets  
 
 ---
 
-## 📜 License & Attribution
+## 📜 License & Attribution  
 
 - Code licensed under **MIT** (open & reusable)  
 - Data from **Citi Bike NYC** and public weather sources  
-- _This project is not affiliated with Citi Bike._  
+- _This project is independent of Citi Bike LLC._  
 
 ```bash
 Mellat, Moein. 2025. *NYC Citi Bike — 2022 Weather & Usage Analytics: 
