@@ -68,7 +68,7 @@ It highlights seasonality, station concentration (Pareto), OD flows, diurnal pat
 | **Intro & KPIs** | ![Intro](reports/screenshots/intro_kpis.png) |
 | **Weather vs Usage** | ![Weather](reports/screenshots/weather_vs_usage.png) |
 | **De-weathered Index** | ![Deweather](reports/screenshots/deweathered_index.png) |
-| **Pareto & Top Stations** | ![Stations](reports/screenshots/station_popularity.png) |
+| **Top Stations** | ![Stations](reports/screenshots/station_popularity.png) |
 | **OD Flows (Sankey + Map)** | ![Flows](reports/screenshots/flows_sankey.png) |
 | **Weekday×Hour Heatmap** | ![Heatmap](reports/screenshots/weekday_hour_heatmap.png) |
 | **Forecast & Decomposition** | ![Forecast](reports/screenshots/time_series_forecast.png) |
