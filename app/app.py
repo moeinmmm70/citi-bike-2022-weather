@@ -1029,8 +1029,14 @@ st.markdown(
     --line: rgba(15,23,42,.10);
     --accent-1: {accent_hex}; --accent-2: {accent_hex}; --warn: #f59e0b;
   }}
-  .rec-card {{ background: linear-gradient(180deg, var(--bg-1), var(--bg-2)); }}
-  .step-card {{ background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(248,250,252,.96)); }}
+  .rec-card {{ 
+    background: linear-gradient(180deg, var(--bg-1), var(--bg-2)); 
+    box-shadow: 0 4px 20px rgba(0,0,0,.06); 
+  }}
+  .step-card {{ 
+    background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(248,250,252,.96)); 
+    box-shadow: 0 4px 20px rgba(0,0,0,.06);
+  }}
 }}
 
 @media (prefers-color-scheme: dark) {{
@@ -1041,11 +1047,15 @@ st.markdown(
     --line: rgba(255,255,255,.10);
     --accent-1: {accent_hex}; --accent-2: {accent_hex}; --warn: #f59e0b;
   }}
+  .rec-card, .step-card {{ 
+    box-shadow: 0 4px 20px rgba(0,0,0,.4);
+  }}
 }}
 </style>
 """,
     unsafe_allow_html=True,
 )
+
 /* Hover motion + subtle shadow */
 .rec-card, .step-card {{ box-shadow: 0 4px 20px rgba(0,0,0,.06); }}
 .rec-card:hover, .step-card:hover {{ transform: translateY(-1px); transition: transform .08s ease; }}
