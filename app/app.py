@@ -1005,18 +1005,22 @@ def inlier_mask(df: pd.DataFrame, col: str, lo: float = 0.01, hi: float = 0.995)
     return (s >= ql) & (s <= qh)
 
 # ────────────────────────────── Sidebar / Data ─────────────────────────────
-
 st.sidebar.header("⚙️ Controls")
 
-default_accent = "#22c55e"  # Tailwind 'green-500'—clean, accessible default
-accent_hex = st.sidebar.color_picker("Accent color", 
-                                     st.session_state.get("accent_hex", default_accent))
+# Accent color (define before CSS)
+default_accent = "#22c55e"
+accent_hex = st.sidebar.color_picker(
+    "Accent color",
+    st.session_state.get("accent_hex", default_accent),
+    key="accent_color"
+)
 st.session_state["accent_hex"] = accent_hex
 
-# Basic validation; fallback if the user enters junk
+import re
 if not isinstance(accent_hex, str) or not re.fullmatch(r"#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})", accent_hex):
     accent_hex = default_accent
 
+# One and only CSS injection — ALL literal braces are doubled
 st.markdown(
     f"""
 <style>
@@ -1027,14 +1031,16 @@ st.markdown(
     --bg-2: rgba(248,250,252,.95);
     --fg-1: #0f172a; --fg-2: #475569; --fg-3: #0f172a;
     --line: rgba(15,23,42,.10);
-    --accent-1: {accent_hex}; --accent-2: {accent_hex}; --warn: #f59e0b;
+    --accent-1: {accent_hex};
+    --accent-2: {accent_hex};
+    --warn: #f59e0b;
   }}
-  .rec-card {{ 
-    background: linear-gradient(180deg, var(--bg-1), var(--bg-2)); 
-    box-shadow: 0 4px 20px rgba(0,0,0,.06); 
+  .rec-card {{
+    background: linear-gradient(180deg, var(--bg-1), var(--bg-2));
+    box-shadow: 0 4px 20px rgba(0,0,0,.06);
   }}
-  .step-card {{ 
-    background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(248,250,252,.96)); 
+  .step-card {{
+    background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(248,250,252,.96));
     box-shadow: 0 4px 20px rgba(0,0,0,.06);
   }}
 }}
@@ -1045,12 +1051,21 @@ st.markdown(
     --bg-2: rgba(16,21,29,.90);
     --fg-1: #e5e7eb; --fg-2: #94a3b8; --fg-3: #cbd5e1;
     --line: rgba(255,255,255,.10);
-    --accent-1: {accent_hex}; --accent-2: {accent_hex}; --warn: #f59e0b;
+    --accent-1: {accent_hex};
+    --accent-2: {accent_hex};
+    --warn: #f59e0b;
   }}
-  .rec-card, .step-card {{ 
+  .rec-card, .step-card {{
     box-shadow: 0 4px 20px rgba(0,0,0,.4);
   }}
 }}
+
+/* Hover motion + subtle shadow */
+.rec-card, .step-card {{ box-shadow: 0 4px 20px rgba(0,0,0,.06); }}
+.rec-card:hover, .step-card:hover {{ transform: translateY(-1px); transition: transform .08s ease; }}
+
+/* Section titles tighter */
+h3, h4 {{ margin-top: .4rem; }}
 </style>
 """,
     unsafe_allow_html=True,
