@@ -15,6 +15,7 @@ from urllib.parse import quote, unquote
 import unicodedata
 import hashlib
 import textwrap
+import re
 try:
     from sklearn.linear_model import LinearRegression
 except Exception:
@@ -1007,7 +1008,17 @@ def inlier_mask(df: pd.DataFrame, col: str, lo: float = 0.01, hi: float = 0.995)
 
 st.sidebar.header("⚙️ Controls")
 
-st.markdown(f"""
+default_accent = "#22c55e"  # Tailwind 'green-500'—clean, accessible default
+accent_hex = st.sidebar.color_picker("Accent color", 
+                                     st.session_state.get("accent_hex", default_accent))
+st.session_state["accent_hex"] = accent_hex
+
+# Basic validation; fallback if the user enters junk
+if not isinstance(accent_hex, str) or not re.fullmatch(r"#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})", accent_hex):
+    accent_hex = default_accent
+
+st.markdown(
+    f"""
 <style>
 /* Auto theme */
 @media (prefers-color-scheme: light) {{
@@ -1021,6 +1032,7 @@ st.markdown(f"""
   .rec-card {{ background: linear-gradient(180deg, var(--bg-1), var(--bg-2)); }}
   .step-card {{ background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(248,250,252,.96)); }}
 }}
+
 @media (prefers-color-scheme: dark) {{
   :root {{
     --bg-1: rgba(25,31,40,.82);
@@ -1030,6 +1042,10 @@ st.markdown(f"""
     --accent-1: {accent_hex}; --accent-2: {accent_hex}; --warn: #f59e0b;
   }}
 }}
+</style>
+""",
+    unsafe_allow_html=True,
+)
 /* Hover motion + subtle shadow */
 .rec-card, .step-card {{ box-shadow: 0 4px 20px rgba(0,0,0,.06); }}
 .rec-card:hover, .step-card:hover {{ transform: translateY(-1px); transition: transform .08s ease; }}
