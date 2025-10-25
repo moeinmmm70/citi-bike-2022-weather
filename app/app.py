@@ -23,7 +23,6 @@ try:
     from scipy.cluster.hierarchy import linkage, leaves_list
 except Exception:
     linkage = leaves_list = None
-# Optional ML: linear simulator
 try:
     from sklearn.linear_model import LinearRegression
 except Exception:
