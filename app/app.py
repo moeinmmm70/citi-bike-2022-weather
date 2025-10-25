@@ -31,8 +31,8 @@ except Exception:
 # ────────────────────────────── Page/Theming ──────────────────────────────
 st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", page_icon="🚲", layout="wide")
 pio.templates.default = "plotly_white"
-accent = st.sidebar.selectbox("🎨 Accent", ["blue", "violet", "teal"], index=0, key="rec_accent")
-accent_hex = {"blue":"#60a5fa", "violet":"#a78bfa", "teal":"#2dd4bf"}[accent]
+#accent = st.sidebar.selectbox("🎨 Accent", ["blue", "violet", "teal"], index=0, key="rec_accent")
+#accent_hex = {"blue":"#60a5fa", "violet":"#a78bfa", "teal":"#2dd4bf"}[accent]
 
 # ────────────────────────────── Paths/Constants ───────────────────────────
 DATA_PATH = Path("data/processed/reduced_citibike_2022.csv")   # ≤25MB sample
@@ -736,7 +736,6 @@ def _qp_clear() -> None:
         st.experimental_set_query_params()
 
 # ──────────────── UI Helpers (Hero Panel + KPI Cards) ────────────────
-
 def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
     """Render a stylized KPI card with title, main value, and optional subtitle."""
     st.markdown(
@@ -904,7 +903,6 @@ def load_data(path: Path, weather_path: Path | None = Path("data/processed/nyc_w
 
     return df
 
-
 def ensure_daily(df: pd.DataFrame) -> pd.DataFrame | None:
     """Aggregate trip rows to daily table with weather attached."""
     if df is None or df.empty or "date" not in df.columns:
@@ -937,7 +935,6 @@ def ensure_daily(df: pd.DataFrame) -> pd.DataFrame | None:
         daily = daily.merge(s, on="date", how="left")
 
     return daily.sort_values("date")
-
 
 def apply_filters(
     df: pd.DataFrame,
@@ -975,7 +972,6 @@ def apply_filters(
 
     return out
 
-
 def compute_core_kpis(df_f: pd.DataFrame, daily_f: pd.DataFrame | None) -> dict:
     """Return small set of KPIs used on the hero cards."""
     total_rides = int(len(df_f))
@@ -986,7 +982,6 @@ def compute_core_kpis(df_f: pd.DataFrame, daily_f: pd.DataFrame | None) -> dict:
         s2 = daily_f.set_index("date")["avg_temp_c"]
         corr_tr = safe_corr(s1, s2)  # uses your earlier helper
     return dict(total_rides=total_rides, avg_day=avg_day, corr_tr=corr_tr)
-
 
 # ───────── Robust plotting helpers ─────────
 
@@ -1097,7 +1092,7 @@ PAGES = [
     "OD Matrix — Top Origins × Dest",          # detailed flow breakdown
     "Station Imbalance (In vs Out)",           # operational challenge
     "Weekday × Hour Heatmap",                  # temporal pattern synthesis
-    "Time Series — Forecast & Decomposition",
+    "Time Series — Forecast & Decomposition",  #forecasting
     "Recommendations"                          # actions and strategy
 ]
 
@@ -1253,6 +1248,7 @@ def _backfill_trip_weather(df_trips: pd.DataFrame, daily_df: pd.DataFrame) -> pd
 df_f = _backfill_trip_weather(df_f, daily_all)
 
 # ────────────────────────────── Pages ──────────────────────────────────────
+
 # ────────────────────────────── Page: Intro ──────────────────────────────
 
 def _selection_summary(
@@ -1283,7 +1279,6 @@ def _selection_summary(
         hr_str = "All day"
     return f"**Selection:** {date_str} · {season_str} · {user_str} · {hr_str}"
 
-
 def _weather_uplift(daily: pd.DataFrame | None) -> str:
     """
     +% uplift for 'comfy' (15–25°C) vs 'extreme' (<5 or >30°C) mean daily rides.
@@ -1300,7 +1295,6 @@ def _weather_uplift(daily: pd.DataFrame | None) -> str:
         return f"{(comfy - extreme) / extreme * 100.0:+.0f}%"
     return "—"
 
-
 def _weather_coverage(daily: pd.DataFrame | None) -> str:
     """% of days with usable temperature in the current selection."""
     if daily is None or daily.empty:
@@ -1309,7 +1303,6 @@ def _weather_coverage(daily: pd.DataFrame | None) -> str:
         cov = 100.0 * daily["avg_temp_c"].notna().mean()
         return f"{cov:.0f}%"
     return "0%"
-
 
 def page_intro(
     df_filtered: pd.DataFrame,
@@ -1809,7 +1802,6 @@ def page_weather_vs_usage(daily_filtered: pd.DataFrame) -> None:
             with st.expander("Model drivers (top |β|)"):
                 st.write(coefs.sort_values(key=np.abs, ascending=False).head(10).round(3))
 
-
 # ────────────────────────────── Page: Trip Metrics ──────────────────────────────
 
 def _hist(df: pd.DataFrame, col: str, log_x: bool, robust: bool, nbins: int = 60, title: str | None = None):
@@ -1827,7 +1819,6 @@ def _hist(df: pd.DataFrame, col: str, log_x: bool, robust: bool, nbins: int = 60
     fig.update_layout(height=420, margin=dict(l=10, r=10, t=40, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
-
 def _add_linear_fit(fig, x_vals, y_vals, name: str = "Linear fit"):
     """Add a simple OLS line to an existing scatter."""
     x = pd.to_numeric(x_vals, errors="coerce")
@@ -1838,7 +1829,6 @@ def _add_linear_fit(fig, x_vals, y_vals, name: str = "Linear fit"):
         xs = np.linspace(x[ok].min(), x[ok].max(), 100)
         ys = a * xs + b
         fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name=name, line=dict(dash="dash")))
-
 
 def page_trip_metrics(df_filtered: pd.DataFrame) -> None:
     """Distributions and relationships for duration, distance, speed."""
