@@ -1063,17 +1063,6 @@ st.markdown(
 /* Hover motion + subtle shadow */
 .rec-card, .step-card {{ box-shadow: 0 4px 20px rgba(0,0,0,.06); }}
 .rec-card:hover, .step-card:hover {{ transform: translateY(-1px); transition: transform .08s ease; }}
-
-/* Section titles tighter */
-h3, h4 {{ margin-top: .4rem; }}
-</style>
-""",
-    unsafe_allow_html=True,
-)
-
-/* Hover motion + subtle shadow */
-.rec-card, .step-card {{ box-shadow: 0 4px 20px rgba(0,0,0,.06); }}
-.rec-card:hover, .step-card:hover {{ transform: translateY(-1px); transition: transform .08s ease; }}
 /* Section titles tighter */
 h3, h4 {{ margin-top: .4rem; }}
 </style>
