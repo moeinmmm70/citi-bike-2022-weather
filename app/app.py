@@ -1376,53 +1376,8 @@ def page_intro(
     with cD:
         kpi_card("Weather Uplift", weather_str, "15–25°C vs extreme", "🌦️")
     with cE:
-        # Swap to Peak Season if you prefer that KPI:
         # kpi_card("Peak Season", peak_value, peak_sub, "🏆")
         kpi_card("Coverage", coverage_str, "Weather data availability", "🧩")
-
-    # Mini trend strip (14-day smoother)
-    if daily_filtered is not None and not daily_filtered.empty and "avg_temp_c" in daily_filtered.columns:
-        d = daily_filtered.sort_values("date").copy()
-        n = 14
-        for col in ["bike_rides_daily", "avg_temp_c"]:
-            d[f"{col}_roll"] = d[col].rolling(n, min_periods=max(2, n // 2), center=True).mean()
-
-        # Fallback colors if constants not defined
-        rides_color = globals().get("RIDES_COLOR", "#1f77b4")
-        temp_color  = globals().get("TEMP_COLOR",  "#d62728")
-
-        fig = make_subplots(specs=[[{"secondary_y": True}]])
-        fig.add_trace(
-            go.Scatter(
-                x=d["date"],
-                y=d["bike_rides_daily_roll"].fillna(d["bike_rides_daily"]),
-                name="Daily rides",
-                mode="lines",
-                line=dict(color=rides_color, width=2),
-            ),
-            secondary_y=False,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=d["date"],
-                y=d["avg_temp_c_roll"].fillna(d["avg_temp_c"]),
-                name="Avg temp (°C)",
-                mode="lines",
-                line=dict(color=temp_color, width=2, dash="dot"),
-                opacity=0.9,
-            ),
-            secondary_y=True,
-        )
-        fig.update_layout(
-            height=280,
-            margin=dict(l=20, r=20, t=30, b=0),
-            hovermode="x unified",
-            showlegend=True,
-            title="Trend overview (14-day smoother)",
-        )
-        fig.update_yaxes(title_text="Rides", secondary_y=False)
-        fig.update_yaxes(title_text="Temp (°C)", secondary_y=True)
-        st.plotly_chart(fig, use_container_width=True)
 
     # Overview copy
     st.markdown("### What you’ll find here")
@@ -3996,7 +3951,7 @@ def page_recommendations(df_filtered: pd.DataFrame | None,
     """, unsafe_allow_html=True)
 
     # ── Evidence tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["🧭 Imbalance focus", "🚚 Hot-20 Pilot Plan", "📈 Trend (rides vs temp)", "📦 Download evidence"])
+    tab1, tab2, tab3 = st.tabs(["🧭 Imbalance focus", "🚚 Hot-20 Pilot Plan", "📦 Download evidence"])
 
     # Imbalance focus
     with tab1:
@@ -4034,37 +3989,8 @@ def page_recommendations(df_filtered: pd.DataFrame | None,
         else:
             st.info("Pilot requires station in/out data (start & end station names).")
 
-    # Trend
-    with tab3:
-        if daily_filtered is not None and not daily_filtered.empty and {"date", "bike_rides_daily"}.issubset(daily_filtered.columns):
-            d = daily_filtered.sort_values("date").copy()
-            n = 14
-            for col in ["bike_rides_daily", "avg_temp_c"]:
-                if col in d.columns:
-                    d[f"{col}_roll"] = d[col].rolling(n, min_periods=max(2, n // 2), center=True).mean()
-
-            fig = make_subplots(specs=[[{"secondary_y": True}]])
-            fig.add_trace(
-                go.Scatter(x=d["date"], y=d.get("bike_rides_daily_roll", d["bike_rides_daily"]),
-                           name="Daily rides", mode="lines", line=dict(width=2)),
-                secondary_y=False
-            )
-            if "avg_temp_c" in d.columns:
-                fig.add_trace(
-                    go.Scatter(x=d["date"], y=d.get("avg_temp_c_roll", d["avg_temp_c"]),
-                               name="Avg temp (°C)", mode="lines", line=dict(width=2, dash="dot"), opacity=0.9),
-                    secondary_y=True
-                )
-            fig.update_layout(height=340, margin=dict(l=10, r=10, t=30, b=10),
-                              hovermode="x unified", title="Trend overview (14-day smoother)")
-            fig.update_yaxes(title_text="Rides", secondary_y=False)
-            fig.update_yaxes(title_text="Temp (°C)", secondary_y=True)
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Daily table not available for trend (need `date` → daily aggregation).")
-
     # Downloads
-    with tab4:
+    with tab3:
         if not imb.empty:
             st.download_button(
                 "Download imbalance stations (CSV)",
