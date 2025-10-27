@@ -32,7 +32,8 @@ except Exception:
 # ────────────────────────────── Page/Theming ──────────────────────────────
 st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", page_icon="🚲", layout="wide")
 pio.templates.default = "plotly_white"
-
+accent = st.sidebar.selectbox("🎨 Accent", ["blue", "violet", "teal"], index=0, key="rec_accent")
+accent_hex = {"blue":"#60a5fa", "violet":"#a78bfa", "teal":"#2dd4bf"}[accent]
 # ────────────────────────────── Paths/Constants ───────────────────────────
 DATA_PATH = Path("data/processed/reduced_citibike_2022.csv")   # ≤25MB sample
 MAP_HTMLS = [
@@ -1004,6 +1005,54 @@ def inlier_mask(df: pd.DataFrame, col: str, lo: float = 0.01, hi: float = 0.995)
 
 # ────────────────────────────── Sidebar / Data ─────────────────────────────
 st.sidebar.header("⚙️ Controls")
+
+default_accent = "#22c55e"  # Tailwind 'green-500'—clean, accessible default
+accent_hex = st.sidebar.color_picker("Accent color", 
+                                     st.session_state.get("accent_hex", default_accent))
+st.session_state["accent_hex"] = accent_hex
+
+# Basic validation; fallback if the user enters junk
+if not isinstance(accent_hex, str) or not re.fullmatch(r"#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})", accent_hex):
+    accent_hex = default_accent
+
+st.markdown(
+    f"""
+<style>
+/* Auto theme */
+@media (prefers-color-scheme: light) {{
+  :root {{
+    --bg-1: rgba(255,255,255,.9);
+    --bg-2: rgba(248,250,252,.95);
+    --fg-1: #0f172a; --fg-2: #475569; --fg-3: #0f172a;
+    --line: rgba(15,23,42,.10);
+    --accent-1: {accent_hex}; --accent-2: {accent_hex}; --warn: #f59e0b;
+  }}
+  .rec-card {{ 
+    background: linear-gradient(180deg, var(--bg-1), var(--bg-2)); 
+    box-shadow: 0 4px 20px rgba(0,0,0,.06); 
+  }}
+  .step-card {{ 
+    background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(248,250,252,.96)); 
+    box-shadow: 0 4px 20px rgba(0,0,0,.06);
+  }}
+}}
+
+@media (prefers-color-scheme: dark) {{
+  :root {{
+    --bg-1: rgba(25,31,40,.82);
+    --bg-2: rgba(16,21,29,.90);
+    --fg-1: #e5e7eb; --fg-2: #94a3b8; --fg-3: #cbd5e1;
+    --line: rgba(255,255,255,.10);
+    --accent-1: {accent_hex}; --accent-2: {accent_hex}; --warn: #f59e0b;
+  }}
+  .rec-card, .step-card {{ 
+    box-shadow: 0 4px 20px rgba(0,0,0,.4);
+  }}
+}}
+</style>
+""",
+    unsafe_allow_html=True,
+)
 
 /* Hover motion + subtle shadow */
 .rec-card, .step-card {{ box-shadow: 0 4px 20px rgba(0,0,0,.06); }}
