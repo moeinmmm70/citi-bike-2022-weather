@@ -1698,11 +1698,6 @@ def page_weather_vs_usage(daily_filtered: pd.DataFrame) -> None:
             Tc = T - Tm
             try:
                 a2, a1, a0 = np.polyfit(Tc, Y, 2)  # Y ≈ a2*Tc^2 + a1*Tc + a0
-                # Only show "optimum" if concave
-                if a2 < 0 and T_opt is not None:
-                    st.success(f"Estimated **optimal temperature** for demand: **{T_opt:.1f} °C** (quadratic fit)")
-                else:
-                    st.info("Optimal temperature not reliable for this selection.")
 
                 # Mini visualization
                 t_grid = np.linspace(tmin, tmax, 120)
