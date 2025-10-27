@@ -30,7 +30,7 @@ except Exception:
     LinearRegression = None
     
 # ────────────────────────────── Page/Theming ──────────────────────────────
-st.set_page_config(page_title="NYC Citi Bike — Strategy Dashboard", page_icon="🚲", layout="wide")
+st.set_page_config(page_title="NYC Citi Bike 2022 — Weather & Usage Analytics", page_icon="🚲", layout="wide")
 pio.templates.default = "plotly_white"
 #accent = st.sidebar.selectbox("🎨 Accent", ["blue", "violet", "teal"], index=0, key="rec_accent")
 #accent_hex = {"blue":"#60a5fa", "violet":"#a78bfa", "teal":"#2dd4bf"}[accent]
@@ -751,8 +751,8 @@ def kpi_card(title: str, value: str, sub: str = "", icon: str = "📊"):
 
 
 def render_hero_panel(
-    title: str = "NYC Citi Bike — Strategy Dashboard",
-    subtitle: str = "Seasonality • Weather–demand correlation • Station intelligence • Time patterns"
+    title: str = "NYC Citi Bike 2022 — Weather & Usage Analytics",
+    subtitle: str = "Weather • Seasonality • Time • Station patterns shaping NYC ridership"
 ):
     """Render the top hero panel with title and subtitle."""
     st.markdown(
